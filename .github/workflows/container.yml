@@ -116,7 +116,6 @@ jobs:
           platforms: ${{ matrix.platforms }}
           build-args: |
             ${{ matrix.build-args }}
-            APP_VERSION=${{ matrix.version }}
             BUILDKIT_DOCKERFILE_CHECK=skip=InvalidDefaultArgInFrom
           pull: true
           push: ${{ env.PUBLISH_PR == 'true' }}
@@ -239,7 +238,6 @@ jobs:
           platforms: ${{ matrix.platforms }}
           build-args: |
             ${{ matrix.build-args }}
-            APP_VERSION=${{ matrix.version }}
             BUILDKIT_DOCKERFILE_CHECK=skip=InvalidDefaultArgInFrom
           # Pull alone does not refresh a cached apt-get layer. Every release
           # must actually install the currently available security updates.

@@ -42,8 +42,23 @@ type upstream struct {
 }
 
 func (u upstream) validate() error {
+	if u.Datasource == "pypi" {
+		if !pypiPackageRE.MatchString(u.DepName) {
+			return errors.New("upstream requires a PyPI package depName")
+		}
+		if !pypiVersionRE.MatchString(u.Version) {
+			return errors.New("upstream version must be a stable X.Y.Z PyPI package version")
+		}
+		if u.RegistryURL != "" {
+			registry, err := url.Parse(u.RegistryURL)
+			if err != nil || registry.Host == "" || (registry.Scheme != "https" && registry.Scheme != "http") || registry.User != nil || registry.Fragment != "" {
+				return errors.New("upstream registryUrl must be an HTTP(S) PyPI index URL")
+			}
+		}
+		return nil
+	}
 	if u.Datasource != "deb" || !debPackageRE.MatchString(u.DepName) {
-		return errors.New("upstream requires datasource deb and a Debian package depName")
+		return errors.New("upstream requires datasource deb or pypi and a valid package depName")
 	}
 	if !debVersionRE.MatchString(u.Version) {
 		return errors.New("upstream version must be a stable X.Y.Z-N Debian package version")
@@ -84,6 +99,8 @@ type build struct {
 var (
 	debPackageRE     = regexp.MustCompile(`^[a-z0-9][a-z0-9+.-]*$`)
 	debVersionRE     = regexp.MustCompile(`^` + versionPattern + `-[0-9]+$`)
+	pypiPackageRE    = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$`)
+	pypiVersionRE    = regexp.MustCompile(`^` + versionPattern + `$`)
 	trackRE          = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
 	aliasRE          = regexp.MustCompile(`^[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}$`)
 	argRE            = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
@@ -210,7 +227,10 @@ func (a app) builds() ([]build, error) {
 			if t.Version != "" {
 				return nil, fmt.Errorf("track %s: use version or upstream.version, not both", t.Name)
 			}
-			t.Version, _, _ = strings.Cut(t.Upstream.Version, "-")
+			t.Version = t.Upstream.Version
+			if t.Upstream.Datasource == "deb" {
+				t.Version, _, _ = strings.Cut(t.Version, "-")
+			}
 		}
 		if err := validateVersion(t.Version); err != nil {
 			return nil, fmt.Errorf("track %s: %w", t.Name, err)
@@ -230,9 +250,11 @@ func (a app) builds() ([]build, error) {
 		}
 		b := defaults
 		b.Track, b.Version = t.Name, t.Version
+		appVersion := t.Version
 		if t.Upstream != nil {
-			b.BuildArgs += "\nUPSTREAM_VERSION=" + t.Upstream.Version
+			appVersion = t.Upstream.Version
 		}
+		b.BuildArgs = "APP_VERSION=" + appVersion
 		baseImage := t.BaseImage
 		if err := validateBaseImage(baseImage); err != nil {
 			return nil, fmt.Errorf("track %s: %w", t.Name, err)
@@ -256,7 +278,7 @@ func (a app) builds() ([]build, error) {
 		}
 		keys := make([]string, 0, len(t.BuildArgs))
 		for key, value := range t.BuildArgs {
-			if !argRE.MatchString(key) || key == "APP_VERSION" || key == "BASE_IMAGE" || key == "UPSTREAM_VERSION" || strings.ContainsAny(value, "\r\n") {
+			if !argRE.MatchString(key) || key == "APP_VERSION" || key == "BASE_IMAGE" || strings.ContainsAny(value, "\r\n") {
 				return nil, fmt.Errorf("invalid build argument %q", key)
 			}
 			keys = append(keys, key)

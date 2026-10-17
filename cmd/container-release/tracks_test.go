@@ -35,7 +35,7 @@ func TestBuildPlan(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(builds) != 2 || builds[0].Image != "ghcr.io/tuxcrate/zrepl" || builds[1].BuildArgs != "\nREV=2" || builds[1].Containerfile != "preview/Containerfile" {
+	if len(builds) != 2 || builds[0].Image != "ghcr.io/tuxcrate/zrepl" || builds[0].BuildArgs != "APP_VERSION=1.2.3" || builds[1].BuildArgs != "APP_VERSION=2.0.0-rc.1\nREV=2" || builds[1].Containerfile != "preview/Containerfile" {
 		t.Fatal(builds)
 	}
 	if err := a.plan(); err != nil {
@@ -74,7 +74,7 @@ func TestUpstreamMetadata(t *testing.T) {
 	config := `{"tracks":[{"name":"stable","upstream":{"datasource":"deb","depName":"zrepl","registryUrl":"` + registry + `","version":"0.7.0-1"},"aliases":["{major}.{minor}","latest"]}]}`
 	a, _ := configApp(t, config)
 	builds, err := a.builds()
-	if err != nil || builds[0].Version != "0.7.0" || builds[0].BuildArgs != "\nUPSTREAM_VERSION=0.7.0-1" || builds[0].Aliases != `["0.7","latest"]` || builds[0].Platforms != "linux/amd64,linux/arm64" {
+	if err != nil || builds[0].Version != "0.7.0" || builds[0].BuildArgs != "APP_VERSION=0.7.0-1" || builds[0].Aliases != `["0.7","latest"]` || builds[0].Platforms != "linux/amd64,linux/arm64" {
 		t.Fatalf("%v: %v", builds, err)
 	}
 	valid := upstream{Datasource: "deb", DepName: "zrepl", RegistryURL: registry, Version: "0.7.0-1"}
@@ -97,7 +97,7 @@ func TestUpstreamMetadata(t *testing.T) {
 	}
 	for _, conflicting := range []string{
 		strings.Replace(config, `"name":"stable"`, `"name":"stable","version":"0.7.0"`, 1),
-		strings.Replace(config, `"name":"stable"`, `"name":"stable","buildArgs":{"UPSTREAM_VERSION":"other"}`, 1),
+		strings.Replace(config, `"name":"stable"`, `"name":"stable","buildArgs":{"APP_VERSION":"other"}`, 1),
 	} {
 		a, _ := configApp(t, conflicting)
 		if _, err := a.builds(); err == nil {
@@ -108,7 +108,7 @@ func TestUpstreamMetadata(t *testing.T) {
 		a, _ := configApp(t, strings.ReplaceAll(config, "0.7.0-1", version))
 		builds, err := a.builds()
 		appVersion, _, _ := strings.Cut(version, "-")
-		if err != nil || builds[0].Version != appVersion || !strings.Contains(builds[0].BuildArgs, "="+version) {
+		if err != nil || builds[0].Version != appVersion || builds[0].BuildArgs != "APP_VERSION="+version {
 			t.Fatalf("%s: %v: %v", version, builds, err)
 		}
 	}
@@ -117,6 +117,69 @@ func TestUpstreamMetadata(t *testing.T) {
 	}
 	if _, err := decodeConfig(strings.NewReader(strings.Replace(config, `"version":"0.7.0-1"`, `"version":"0.7.0-1","buildArg":"CUSTOM_VERSION"`, 1))); err == nil {
 		t.Fatal("accepted removed upstream buildArg field")
+	}
+}
+
+func TestPyPIUpstreamMetadata(t *testing.T) {
+	config := `{"tracks":[{"name":"stable","upstream":{"datasource":"pypi","depName":"gallery-dl","version":"1.32.16"},"aliases":["{major}","{major}.{minor}","latest"]}]}`
+	a, _ := configApp(t, config)
+	builds, err := a.builds()
+	if err != nil || len(builds) != 1 || builds[0].Version != "1.32.16" || builds[0].BuildArgs != "APP_VERSION=1.32.16" || builds[0].Aliases != `["1","1.32","latest"]` {
+		t.Fatalf("%v: %v", builds, err)
+	}
+	valid := upstream{Datasource: "pypi", DepName: "gallery-dl", Version: "1.32.16"}
+	for _, name := range []string{"gallery-dl", "Some_Package.name", "a"} {
+		u := valid
+		u.DepName = name
+		if err := u.validate(); err != nil {
+			t.Fatalf("%+v: %v", u, err)
+		}
+	}
+	for _, registry := range []string{"", "https://pypi.org/simple", "https://example.com/simple/"} {
+		u := valid
+		u.RegistryURL = registry
+		if err := u.validate(); err != nil {
+			t.Fatalf("%+v: %v", u, err)
+		}
+	}
+	for _, mutate := range []func(*upstream){
+		func(u *upstream) { u.DepName = "" },
+		func(u *upstream) { u.DepName = "bad package" },
+		func(u *upstream) { u.DepName = "-package" },
+		func(u *upstream) { u.DepName = "package." },
+		func(u *upstream) { u.DepName = "package[extra]" },
+		func(u *upstream) { u.Version = "" },
+		func(u *upstream) { u.Version = "1.32" },
+		func(u *upstream) { u.Version = "01.32.16" },
+		func(u *upstream) { u.Version = "1.32.16rc1" },
+		func(u *upstream) { u.Version = "1.32.16-rc.1" },
+		func(u *upstream) { u.Version = "1.32.16.post1" },
+		func(u *upstream) { u.Version = "1!1.32.16" },
+		func(u *upstream) { u.Version = "1.32.16+local" },
+		func(u *upstream) { u.RegistryURL = "file:///etc/passwd" },
+		func(u *upstream) { u.RegistryURL = "https:///simple" },
+		func(u *upstream) { u.RegistryURL = "https://user:secret@example.com/simple" },
+		func(u *upstream) { u.RegistryURL = "https://example.com/simple#fragment" },
+	} {
+		u := valid
+		mutate(&u)
+		if u.validate() == nil {
+			t.Errorf("accepted invalid PyPI upstream: %+v", u)
+		}
+	}
+	for _, conflicting := range []string{
+		strings.Replace(config, `"name":"stable"`, `"name":"stable","version":"1.32.16"`, 1),
+		strings.Replace(config, `"name":"stable"`, `"name":"stable","buildArgs":{"APP_VERSION":"other"}`, 1),
+	} {
+		a, _ := configApp(t, conflicting)
+		if _, err := a.builds(); err == nil {
+			t.Fatal("accepted competing PyPI package pin")
+		}
+	}
+	a, _ = configApp(t, strings.ReplaceAll(config, "1.32.16", "1.33.0"))
+	builds, err = a.builds()
+	if err != nil || builds[0].Version != "1.33.0" || builds[0].BuildArgs != "APP_VERSION=1.33.0" || builds[0].Aliases != `["1","1.33","latest"]` {
+		t.Fatalf("%v: %v", builds, err)
 	}
 }
 
@@ -135,7 +198,6 @@ func TestInvalidConfigurations(t *testing.T) {
 		`{"tracks":[{"name":"stable","version":"1.2.3","aliases":["stable","stable"]}]}`,
 		`{"tracks":[{"name":"stable","version":"1.2.3","aliases":[],"context":"../other"}]}`,
 		`{"tracks":[{"name":"stable","version":"1.2.3","aliases":[],"buildArgs":{"APP_VERSION":"other"}}]}`,
-		`{"tracks":[{"name":"stable","version":"1.2.3","aliases":[],"buildArgs":{"UPSTREAM_VERSION":"other"}}]}`,
 		`{"tracks":[{"name":"stable","version":"1.2.3","aliases":[],"buildArgs":{"ARG":"x\ny"}}]}`,
 		`{"tracks":[{"name":"a","version":"1.2.3","aliases":["latest"]},{"name":"b","version":"2.0.0","aliases":["latest"]}]}`,
 		`{"tracks":[{"name":"a","version":"1.2.3","aliases":[]},{"name":"b","version":"1.2.3","aliases":[]}]}`,
@@ -255,7 +317,7 @@ func TestPlanMetadataOverrides(t *testing.T) {
 	env["BUILD_ARGS"] = "FOO=other"
 	env["APP_VERSION"] = "9.9.9"
 	builds, err := a.builds()
-	if err != nil || builds[0].Image != "ghcr.io/tuxcrate/custom" || builds[0].Context != "app" || builds[0].Containerfile != "Containerfile" || builds[0].Platforms != "linux/amd64" || builds[0].BuildArgs != "\nFOO=bar" || builds[0].Version != "1.2.3" {
+	if err != nil || builds[0].Image != "ghcr.io/tuxcrate/custom" || builds[0].Context != "app" || builds[0].Containerfile != "Containerfile" || builds[0].Platforms != "linux/amd64" || builds[0].BuildArgs != "APP_VERSION=1.2.3\nFOO=bar" || builds[0].Version != "1.2.3" {
 		t.Fatalf("%v: %v", builds, err)
 	}
 }
@@ -327,7 +389,7 @@ func TestPerTrackBaseImages(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if builds[0].BuildArgs != "\nREV=1\nBASE_IMAGE="+base || builds[1].BuildArgs != "\nBASE_IMAGE="+override {
+	if builds[0].BuildArgs != "APP_VERSION=1.2.3\nREV=1\nBASE_IMAGE="+base || builds[1].BuildArgs != "APP_VERSION=2.0.0-rc.1\nBASE_IMAGE="+override {
 		t.Fatal(builds)
 	}
 	if err := a.plan(); err != nil {
@@ -343,7 +405,7 @@ func TestTrackBaseImage(t *testing.T) {
 	base := "debian:13-slim@sha256:" + strings.Repeat("a", 64)
 	a, _ := configApp(t, `{"tracks":[{"name":"stable","version":"1.2.3","aliases":[],"baseImage":"`+base+`"}]}`)
 	builds, err := a.builds()
-	if err != nil || builds[0].BuildArgs != "\nBASE_IMAGE="+base {
+	if err != nil || builds[0].BuildArgs != "APP_VERSION=1.2.3\nBASE_IMAGE="+base {
 		t.Fatalf("%v: %v", builds, err)
 	}
 }
