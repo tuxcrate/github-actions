@@ -33,7 +33,7 @@ jobs:
       matrix: ${{ steps.plan.outputs.matrix }}
     steps:
       - name: Check out container sources
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           path: source
           persist-credentials: false
@@ -45,7 +45,7 @@ jobs:
             exit 1
           fi
       - name: Check out shared release tooling
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           repository: tuxcrate/github-actions
           ref: ${{ inputs.shared-ref }}
@@ -76,7 +76,7 @@ jobs:
       PUBLISH_PR: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
     steps:
       - name: Check out container sources
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
       - name: Set up QEMU
@@ -200,13 +200,13 @@ jobs:
         working-directory: source
     steps:
       - name: Check out container sources and release history
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           path: source
           fetch-depth: 0
           persist-credentials: false
       - name: Check out shared release tooling
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           repository: tuxcrate/github-actions
           ref: ${{ inputs.shared-ref }}
