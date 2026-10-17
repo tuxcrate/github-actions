@@ -1,0 +1,240 @@
+name: Container
+
+on:
+  workflow_call:
+    inputs:
+      shared-ref:
+        description: Must match the ref used to call this workflow
+        default: main
+        type: string
+      website-repository:
+        description: Optional owner/repo to notify after publication (requires website-token)
+        default: ''
+        type: string
+    secrets:
+      website-token:
+        description: Optional GitHub App or fine-grained token with contents write access to the website repository
+        required: false
+
+permissions:
+  contents: read
+
+# All publishing entry points must use this workflow so revisions and aliases
+# cannot race. PRs have their own group and cannot cancel a release.
+concurrency:
+  group: container-${{ github.repository }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || 'release' }}
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - name: Check out container sources
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          path: source
+          persist-credentials: false
+      - name: Require root meta.yaml
+        working-directory: source
+        run: |
+          if [[ ! -f meta.yaml ]]; then
+            echo '::error::A meta.yaml file is required in the caller repository root.'
+            exit 1
+          fi
+      - name: Check out shared release tooling
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: tuxcrate/github-actions
+          ref: ${{ inputs.shared-ref }}
+          path: shared
+          persist-credentials: false
+      - name: Build release tooling
+        run: go build -C shared -o "$RUNNER_TEMP/container-release" ./cmd/container-release
+      - name: Validate root meta.yaml and alias ownership
+        id: plan
+        working-directory: source
+        run: '"$RUNNER_TEMP/container-release" plan'
+
+  pull-request:
+    needs: plan
+    if: github.event_name == 'pull_request'
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - name: Check out container sources
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Build all platforms (never publish PRs)
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.containerfile }}
+          platforms: ${{ matrix.platforms }}
+          build-args: |
+            ${{ matrix.build-args }}
+            APP_VERSION=${{ matrix.version }}
+            BUILDKIT_DOCKERFILE_CHECK=skip=InvalidDefaultArgInFrom
+          pull: true
+          push: false
+          # Check current package availability on every architecture, including
+          # reruns after an upstream repository finishes publishing a version.
+          no-cache: true
+          cache-from: type=gha,scope=container-${{ matrix.track }}
+          cache-to: type=gha,mode=max,scope=container-${{ matrix.track }}
+
+  release:
+    needs: plan
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    if: >-
+      github.ref == format('refs/heads/{0}', github.event.repository.default_branch) &&
+      (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: write
+      packages: write
+    defaults:
+      run:
+        shell: bash
+        working-directory: source
+    steps:
+      - name: Check out container sources and release history
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          path: source
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check out shared release tooling
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: tuxcrate/github-actions
+          ref: ${{ inputs.shared-ref }}
+          path: shared
+          persist-credentials: false
+      - name: Build release tooling
+        run: go build -C ../shared -o "$RUNNER_TEMP/container-release" ./cmd/container-release
+      - name: Validate release metadata
+        id: metadata
+        env:
+          APP_VERSION: ${{ matrix.version }}
+          IMAGE: ${{ matrix.image }}
+        run: '"$RUNNER_TEMP/container-release" metadata'
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Rebuild and publish multiarch image by digest
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: source/${{ matrix.context }}
+          file: source/${{ matrix.containerfile }}
+          platforms: ${{ matrix.platforms }}
+          build-args: |
+            ${{ matrix.build-args }}
+            APP_VERSION=${{ matrix.version }}
+            BUILDKIT_DOCKERFILE_CHECK=skip=InvalidDefaultArgInFrom
+          # Pull alone does not refresh a cached apt-get layer. Every release
+          # must actually install the currently available security updates.
+          pull: true
+          no-cache: true
+          outputs: type=image,name=${{ steps.metadata.outputs.image }},push-by-digest=true,name-canonical=true,push=true
+          provenance: mode=max
+          sbom: true
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ matrix.version }}
+          cache-to: type=gha,mode=max,scope=container-${{ matrix.track }}
+      - name: Install changelog generator
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2
+        with:
+          tool: git-cliff@2.14.2
+      - name: Reserve revision and create draft release
+        id: release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APP_VERSION: ${{ matrix.version }}
+          TRACK: ${{ matrix.track }}
+          ALIASES: ${{ matrix.aliases }}
+          IMAGE: ${{ steps.metadata.outputs.image }}
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+          PLATFORMS: ${{ matrix.platforms }}
+        run: '"$RUNNER_TEMP/container-release" --cliff-config ../shared/cliff.toml reserve'
+      - name: Attach machine-readable release metadata
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APP_VERSION: ${{ matrix.version }}
+          TRACK: ${{ matrix.track }}
+          ALIASES: ${{ matrix.aliases }}
+          IMAGE: ${{ steps.metadata.outputs.image }}
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+          PLATFORMS: ${{ matrix.platforms }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          "$RUNNER_TEMP/container-release" manifest
+          gh release upload "$RELEASE_TAG" release.json
+      - name: Publish revision tag and moving aliases
+        env:
+          IMAGE: ${{ steps.metadata.outputs.image }}
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+          IMAGE_TAGS: ${{ steps.release.outputs.tags }}
+        run: |
+          set -euo pipefail
+          # The immutable revision is first. Its draft release is retained if
+          # anything fails, so subsequent runs allocate a new revision.
+          while IFS= read -r tag; do
+            docker buildx imagetools create --tag "${IMAGE}:${tag}" "${IMAGE}@${IMAGE_DIGEST}"
+          done <<< "$IMAGE_TAGS"
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          MAKE_LATEST: ${{ steps.release.outputs.latest }}
+        run: gh release edit "$RELEASE_TAG" --draft=false --latest="$MAKE_LATEST"
+
+  notify-website:
+    needs: release
+    if: needs.release.result == 'success' && inputs.website-repository != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Request website refresh
+        # Publication is already complete; scheduled website builds recover a
+        # missed notification without allocating another image revision.
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.website-token }}
+          WEBSITE_REPOSITORY: ${{ inputs.website-repository }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$GH_TOKEN" ]]; then
+            echo '::warning::Website refresh skipped: configure the WEBSITE_TOKEN secret in the caller repository.'
+            exit 0
+          fi
+          [[ "$WEBSITE_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]
+          gh api --method POST "repos/$WEBSITE_REPOSITORY/dispatches" -f event_type=image-published

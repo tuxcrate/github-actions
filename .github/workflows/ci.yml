@@ -1,0 +1,27 @@
+name: Test shared workflows
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2
+        with:
+          tool: actionlint@1.7.7,git-cliff@2.14.2
+      - name: Lint workflows
+        run: actionlint
+      - name: Test release logic and generated changelogs
+        run: go test -race ./...
+      - name: Vet Go code
+        run: go vet ./...

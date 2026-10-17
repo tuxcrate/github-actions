@@ -1,2 +1,5 @@
 # github-actions
-Shared GitHub Actions workflows for Tuxcrate container images
+
+Shared container build and release workflows for Tuxcrate.
+
+[Documentation](https://github.com/tuxcrate/website/blob/main/docs/maintainers/container-releases.md)
