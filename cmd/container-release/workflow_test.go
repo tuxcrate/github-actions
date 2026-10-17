@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -188,7 +189,7 @@ func TestWorkflowPRImages(t *testing.T) {
 func testPRImageComment(t *testing.T, script string) {
 	t.Helper()
 	for _, track := range []string{"stable", "preview"} {
-		for _, scenario := range []string{"create", "update", "lookup-fails"} {
+		for _, scenario := range []string{"create", "update", "update-later-page", "multiple-matches", "lookup-fails", "invalid-json"} {
 			t.Run("comment/"+track+"/"+scenario, func(t *testing.T) {
 				dir := t.TempDir()
 				// Simulate GitHub without making requests or requiring gh in Go tests.
@@ -196,8 +197,11 @@ func testPRImageComment(t *testing.T, script string) {
 set -euo pipefail
 if [[ "$2" == '--paginate' ]]; then
   printf '%s\n' "$@" > "$GH_LOOKUP"
+  for arg in "$@"; do
+    if [[ "$arg" == '--jq' || "$arg" == '--template' ]]; then exit 1; fi
+  done
   if [[ "$FAIL_LOOKUP" == true ]]; then exit 1; fi
-  printf '%s' "$COMMENT_ID"
+  printf '%s' "$COMMENT_PAGES"
 else
   printf '%s\n' "$@" > "$GH_WRITE"
 fi
@@ -205,9 +209,24 @@ fi
 				if err := os.WriteFile(filepath.Join(dir, "gh"), []byte(stub), 0755); err != nil {
 					t.Fatal(err)
 				}
-				id, fail := "", "false"
-				if scenario == "update" {
-					id = "42"
+				marker := "<!-- tuxcrate-pr-image:" + track + " -->"
+				comment := func(id int, login, body string) string {
+					return fmt.Sprintf(`{"id":%d,"user":{"login":%q},"body":%q}`, id, login, body)
+				}
+				// Neither another user's matching marker nor another track's bot
+				// comment should be updated. Exercise the real jq filter.
+				unrelated := comment(1, "contributor", marker) + "," + comment(2, "github-actions[bot]", "<!-- tuxcrate-pr-image:other -->")
+				match := comment(42, "github-actions[bot]", marker+"\nPrevious preview")
+				pages, fail := "[["+unrelated+"],[]]", "false"
+				switch scenario {
+				case "update":
+					pages = "[[" + unrelated + "," + match + "]]"
+				case "update-later-page":
+					pages = "[[" + unrelated + "],[" + match + "]]"
+				case "multiple-matches":
+					pages = "[[" + match + "],[" + comment(43, "github-actions[bot]", marker) + "]]"
+				case "invalid-json":
+					pages = "invalid JSON"
 				}
 				if scenario == "lookup-fails" {
 					fail = "true"
@@ -219,12 +238,12 @@ fi
 				runURL := "https://github.com/tuxcrate/zrepl/actions/runs/123"
 				cmd := exec.Command("bash", "-c", script)
 				cmd.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"),
-					"GH_LOOKUP="+lookup, "GH_WRITE="+write, "COMMENT_ID="+id, "FAIL_LOOKUP="+fail,
+					"GH_LOOKUP="+lookup, "GH_WRITE="+write, "COMMENT_PAGES="+pages, "FAIL_LOOKUP="+fail,
 					"GITHUB_REPOSITORY=tuxcrate/zrepl", "PR_NUMBER=12", "TRACK="+track,
 					"IMAGE="+image, "IMAGE_DIGEST="+digest, "COMMIT_SHA="+sha,
 					"PLATFORMS=linux/amd64,linux/arm64", "RUN_URL="+runURL)
 				out, err := cmd.CombinedOutput()
-				if scenario == "lookup-fails" {
+				if scenario == "lookup-fails" || scenario == "invalid-json" {
 					if err == nil {
 						t.Fatal("ignored failed comment lookup")
 					}
@@ -240,18 +259,15 @@ fi
 				if err != nil {
 					t.Fatal(err)
 				}
-				marker := "<!-- tuxcrate-pr-image:" + track + " -->"
-				for _, want := range []string{"--paginate\n--slurp", "repos/tuxcrate/zrepl/issues/12/comments", `select(.user.login == "github-actions[bot]"`, `startswith("` + marker + `")`} {
-					if !strings.Contains(string(query), want) {
-						t.Fatalf("comment lookup missing %q: %s", want, query)
-					}
+				if want := "api\n--paginate\n--slurp\nrepos/tuxcrate/zrepl/issues/12/comments\n"; string(query) != want {
+					t.Fatalf("comment lookup: got %q, want %q", query, want)
 				}
 				request, err := os.ReadFile(write)
 				if err != nil {
 					t.Fatal(err)
 				}
 				endpoint := "POST\nrepos/tuxcrate/zrepl/issues/12/comments"
-				if scenario == "update" {
+				if scenario == "update" || scenario == "update-later-page" || scenario == "multiple-matches" {
 					endpoint = "PATCH\nrepos/tuxcrate/zrepl/issues/comments/42"
 				}
 				tag := "pr-12-" + track
