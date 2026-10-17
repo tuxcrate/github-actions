@@ -81,6 +81,62 @@ func TestWorkflowRequiresRootMetadata(t *testing.T) {
 	}
 }
 
+func TestWorkflowPRAssignment(t *testing.T) {
+	data, err := os.ReadFile("../../.github/workflows/container.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var workflow struct {
+		Jobs map[string]struct {
+			If          string            `yaml:"if"`
+			Needs       any               `yaml:"needs"`
+			Permissions map[string]string `yaml:"permissions"`
+			Steps       []struct {
+				Uses string            `yaml:"uses"`
+				Run  string            `yaml:"run"`
+				Env  map[string]string `yaml:"env"`
+			} `yaml:"steps"`
+		} `yaml:"jobs"`
+	}
+	if err := yaml.Unmarshal(data, &workflow); err != nil {
+		t.Fatal(err)
+	}
+	job := workflow.Jobs["assign-pull-request"]
+	wantGate := "github.event_name == 'pull_request' && github.event.pull_request.user.login != 'renovate[bot]' && github.event.pull_request.head.repo.full_name == github.repository"
+	if strings.TrimSpace(job.If) != wantGate {
+		t.Fatal("assignment must use the PR author to exclude Renovate and skip forks and non-PR events")
+	}
+	if job.Needs != nil || len(job.Permissions) != 1 || job.Permissions["pull-requests"] != "write" {
+		t.Fatal("assignment must run independently of builds with only PR write permission")
+	}
+	if len(job.Steps) != 1 || job.Steps[0].Uses != "" {
+		t.Fatal("assignment must not check out or execute PR code")
+	}
+	step := job.Steps[0]
+	if step.Env["GH_TOKEN"] != "${{ secrets.GITHUB_TOKEN }}" || step.Env["PR_NUMBER"] != "${{ github.event.pull_request.number }}" {
+		t.Fatal("assignment must use GITHUB_TOKEN and the event PR number")
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "gh"), []byte("#!/bin/bash\nprintf '%s\\n' \"$@\" > \"$GH_REQUEST\"\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	request := filepath.Join(dir, "request")
+	cmd := exec.Command("bash", "-e", "-o", "pipefail", "-c", step.Run)
+	cmd.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"), "GH_REQUEST="+request,
+		"GITHUB_REPOSITORY=tuxcrate/zrepl", "PR_NUMBER=12")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("assignment script: %v: %s", err, out)
+	}
+	got, err := os.ReadFile(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "api\n--method\nPOST\nrepos/tuxcrate/zrepl/issues/12/assignees\n-f\nassignees[]=Skaronator\n--silent\n"
+	if string(got) != want {
+		t.Fatalf("assignment must add Skaronator without replacing existing assignees: got %q, want %q", got, want)
+	}
+}
+
 func TestWorkflowPRImages(t *testing.T) {
 	data, err := os.ReadFile("../../.github/workflows/container.yml")
 	if err != nil {
