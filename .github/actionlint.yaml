@@ -1,0 +1,4 @@
+# GitHub-hosted Ubuntu 26.04 is available, but actionlint does not yet know its label.
+self-hosted-runner:
+  labels:
+    - ubuntu-26.04
