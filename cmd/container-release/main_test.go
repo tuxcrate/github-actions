@@ -275,6 +275,7 @@ func TestReleaseNotesFormatting(t *testing.T) {
 		t.Fatalf("release notes changed image tags: %v", tags)
 	}
 	for _, want := range []string{
+		"- Immutable Image: `ghcr.io/tuxcrate/zrepl:0.7.0-r1@" + env["IMAGE_DIGEST"] + "`\n",
 		"- Moving aliases:\n  - `ghcr.io/tuxcrate/zrepl:0.7.0`\n  - `ghcr.io/tuxcrate/zrepl:0.7`\n  - `ghcr.io/tuxcrate/zrepl:0`\n  - `ghcr.io/tuxcrate/zrepl:latest`\n  - `ghcr.io/tuxcrate/zrepl:stable`\n",
 		"- Platforms: `linux/amd64`, `linux/arm64`\n",
 		"\n\n## Packaging changes\n\n",
@@ -284,6 +285,7 @@ func TestReleaseNotesFormatting(t *testing.T) {
 		}
 	}
 	for _, absent := range []string{
+		"- Digest pin:",
 		"- Source:",
 		"[Full diff]",
 		"This rebuild uses the base image reference recorded in source and refreshes installed OS packages.",

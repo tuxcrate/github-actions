@@ -246,8 +246,8 @@ func (a app) releaseNotes(version string, tags []string, image, digest, previous
 	for i, platform := range platforms {
 		platforms[i] = "`" + strings.TrimSpace(platform) + "`"
 	}
-	notes := fmt.Sprintf("## Container image\n\n- Application version: `%s`\n- Immutable image: `%s:%s`\n- Digest pin: `%s@%s`\n- Moving aliases:\n%s\n- Platforms: %s\n\n## Packaging changes\n\n%s\n",
-		version, image, tags[0], image, digest, strings.Join(aliases, "\n"), strings.Join(platforms, ", "), changes)
+	notes := fmt.Sprintf("## Container image\n\n- Application version: `%s`\n- Immutable Image: `%s:%s@%s`\n- Moving aliases:\n%s\n- Platforms: %s\n\n## Packaging changes\n\n%s\n",
+		version, image, tags[0], digest, strings.Join(aliases, "\n"), strings.Join(platforms, ", "), changes)
 	return notes, nil
 }
 
