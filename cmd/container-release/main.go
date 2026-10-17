@@ -114,9 +114,8 @@ type release struct {
 }
 
 type app struct {
-	exec        commandRunner
-	getenv      func(string) string
-	cliffConfig string
+	exec   commandRunner
+	getenv func(string) string
 }
 
 func (a app) run(input string, args ...string) (string, error) {
@@ -204,27 +203,21 @@ func (a app) releaseNotes(version string, tags []string, image, digest, previous
 	if previous != "" {
 		commitRange = previous + "..HEAD"
 	}
-	countText, err := a.run("", "git", "rev-list", "--count", commitRange)
+	commits, err := a.run("", "git", "log", "--reverse", "--format=%H%x09%s", commitRange)
 	if err != nil {
 		return "", err
 	}
-	count, err := strconv.ParseUint(countText, 10, 64)
-	if err != nil {
-		return "", fmt.Errorf("invalid commit count: %w", err)
-	}
 	var changes string
-	if count > 0 {
-		args := []string{"git-cliff", "--config", a.cliffConfig, "--strip", "all"}
-		// A lone HEAD is not a supported git-cliff range. The first release
-		// omits the range to include the complete checked-out history.
-		if previous != "" {
-			args = append(args, commitRange)
+	if commits != "" {
+		var lines []string
+		for _, commit := range strings.Split(commits, "\n") {
+			sha, subject, ok := strings.Cut(commit, "\t")
+			if !ok || len(sha) < 7 {
+				return "", fmt.Errorf("invalid git log entry: %q", commit)
+			}
+			lines = append(lines, fmt.Sprintf("- %s ([%s](%s/commit/%s))", subject, sha[:7], url, sha))
 		}
-		changes, err = a.run("", args...)
-		if err != nil {
-			return "", err
-		}
-		changes = strings.ReplaceAll(changes, "$REPOSITORY_URL", url)
+		changes = strings.Join(lines, "\n")
 	} else {
 		reason := "Image rebuild"
 		if a.getenv("GITHUB_EVENT_NAME") == "schedule" {
@@ -234,18 +227,14 @@ func (a app) releaseNotes(version string, tags []string, image, digest, previous
 	}
 	aliases := make([]string, 0, len(tags)-1)
 	for _, tag := range tags[1:] {
-		aliases = append(aliases, "`"+image+":"+tag+"`")
+		aliases = append(aliases, "  - `"+image+":"+tag+"`")
 	}
-	sha := a.getenv("GITHUB_SHA")
-	shortSHA := sha
-	if len(shortSHA) > 7 {
-		shortSHA = shortSHA[:7]
+	platforms := strings.Split(a.getenv("PLATFORMS"), ",")
+	for i, platform := range platforms {
+		platforms[i] = "`" + strings.TrimSpace(platform) + "`"
 	}
-	notes := fmt.Sprintf("## Container image\n\n- Application version: `%s`\n- Immutable image: `%s:%s`\n- Digest pin: `%s@%s`\n- Moving aliases: %s\n- Platforms: `%s`\n- Source: [%s](%s/commit/%s)\n\nThis rebuild uses the base image reference recorded in source and refreshes installed OS packages. A pinned base image changes only when its digest is updated. This does not guarantee that vulnerabilities in the upstream application binary are fixed.\n\n## Packaging changes\n\n%s\n",
-		version, image, tags[0], image, digest, strings.Join(aliases, ", "), a.getenv("PLATFORMS"), shortSHA, url, sha, changes)
-	if previous != "" {
-		notes += fmt.Sprintf("\n[Full diff](%s/compare/%s...%s)\n", url, previous, sha)
-	}
+	notes := fmt.Sprintf("## Container image\n\n- Application version: `%s`\n- Immutable image: `%s:%s`\n- Digest pin: `%s@%s`\n- Moving aliases:\n%s\n- Platforms: %s\n\n## Packaging changes\n\n%s\n",
+		version, image, tags[0], image, digest, strings.Join(aliases, "\n"), strings.Join(platforms, ", "), changes)
 	return notes, nil
 }
 
@@ -353,9 +342,8 @@ func (a app) reserve() error {
 }
 
 func main() {
-	config := flag.String("cliff-config", "cliff.toml", "path to the shared git-cliff configuration")
 	flag.Parse()
-	a := app{exec: execCommand, getenv: os.Getenv, cliffConfig: *config}
+	a := app{exec: execCommand, getenv: os.Getenv}
 	var err error
 	switch {
 	case flag.NArg() == 1 && flag.Arg(0) == "metadata":
@@ -367,7 +355,7 @@ func main() {
 	case flag.NArg() == 1 && flag.Arg(0) == "manifest":
 		err = a.manifest()
 	default:
-		err = errors.New("usage: container-release [--cliff-config path] {plan|metadata|reserve|manifest}")
+		err = errors.New("usage: container-release {plan|metadata|reserve|manifest}")
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)

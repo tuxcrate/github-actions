@@ -253,10 +253,6 @@ jobs:
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.version=${{ matrix.version }}
           cache-to: type=gha,mode=max,scope=container-${{ matrix.track }}
-      - name: Install changelog generator
-        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2
-        with:
-          tool: git-cliff@2.14.2
       - name: Reserve revision and create draft release
         id: release
         env:
@@ -267,7 +263,7 @@ jobs:
           IMAGE: ${{ steps.metadata.outputs.image }}
           IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
           PLATFORMS: ${{ matrix.platforms }}
-        run: '"$RUNNER_TEMP/container-release" --cliff-config ../shared/cliff.toml reserve'
+        run: '"$RUNNER_TEMP/container-release" reserve'
       - name: Attach machine-readable release metadata
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

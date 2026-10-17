@@ -215,8 +215,8 @@ func TestPrereleaseReservation(t *testing.T) {
 				t.Fatal(args)
 			}
 			return commandResult{code: 1, stderr: "not found"}, nil
-		case args[0] == "git" && args[1] == "rev-list":
-			return commandResult{stdout: "0"}, nil
+		case args[0] == "git" && args[1] == "log":
+			return commandResult{}, nil
 		case args[0] == "gh" && args[2] == "--method":
 			var payload map[string]any
 			if err := json.Unmarshal([]byte(input), &payload); err != nil {

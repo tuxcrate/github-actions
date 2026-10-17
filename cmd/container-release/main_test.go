@@ -198,8 +198,7 @@ func TestReservation(t *testing.T) {
 				case 4:
 					want = []string{"docker", "buildx", "imagetools", "inspect", "ghcr.io/tuxcrate/zrepl:0.7.0-r9"}
 				case 5:
-					want = []string{"git", "rev-list", "--count", "HEAD"}
-					stdout = "0"
+					want = []string{"git", "log", "--reverse", "--format=%H%x09%s", "HEAD"}
 				case 6:
 					want = []string{"gh", "api", "--method", "POST", "repos/tuxcrate/zrepl/releases", "--input", "-"}
 					var payload map[string]any
@@ -258,20 +257,46 @@ func fmtBool(fail bool) string {
 	return "successful reservation"
 }
 
-func TestChangelogIntegration(t *testing.T) {
-	if _, err := exec.LookPath("git-cliff"); err != nil {
-		t.Skip("git-cliff required for changelog integration")
+func TestReleaseNotesFormatting(t *testing.T) {
+	a, env := testApp(t)
+	a.exec = func(_ string, args ...string) (commandResult, error) {
+		if !reflect.DeepEqual(args, []string{"git", "log", "--reverse", "--format=%H%x09%s", "HEAD"}) {
+			t.Fatalf("unexpected command: %v", args)
+		}
+		return commandResult{}, nil
 	}
-	config, err := filepath.Abs("../../cliff.toml")
+	notes, err := a.releaseNotes("0.7.0", imageTags("0.7.0", 1), env["IMAGE"], env["IMAGE_DIGEST"], "")
 	if err != nil {
 		t.Fatal(err)
 	}
+	for _, want := range []string{
+		"- Moving aliases:\n  - `ghcr.io/tuxcrate/zrepl:0.7.0`\n  - `ghcr.io/tuxcrate/zrepl:0.7`\n  - `ghcr.io/tuxcrate/zrepl:latest`\n",
+		"- Platforms: `linux/amd64`, `linux/arm64`\n",
+		"\n\n## Packaging changes\n\n",
+	} {
+		if !strings.Contains(notes, want) {
+			t.Errorf("missing %q in %s", want, notes)
+		}
+	}
+	for _, absent := range []string{
+		"- Source:",
+		"[Full diff]",
+		"This rebuild uses the base image reference recorded in source and refreshes installed OS packages.",
+		"A pinned base image changes only when its digest is updated.",
+		"This does not guarantee that vulnerabilities in the upstream application binary are fixed.",
+	} {
+		if strings.Contains(notes, absent) {
+			t.Errorf("unexpected %q in %s", absent, notes)
+		}
+	}
+}
+
+func TestChangelogIntegration(t *testing.T) {
 	dir := t.TempDir()
 	for key, value := range map[string]string{"GIT_AUTHOR_NAME": "Test", "GIT_AUTHOR_EMAIL": "test@example.com", "GIT_COMMITTER_NAME": "Test", "GIT_COMMITTER_EMAIL": "test@example.com"} {
 		t.Setenv(key, value)
 	}
 	a, env := testApp(t)
-	a.cliffConfig = config
 	// Execute in a temporary source checkout without changing process cwd.
 	a.exec = func(input string, args ...string) (commandResult, error) {
 		cmd := exec.Command(args[0], args[1:]...)
@@ -293,6 +318,7 @@ func TestChangelogIntegration(t *testing.T) {
 	}
 	run("git", "init", "--quiet")
 	run("git", "commit", "--allow-empty", "-m", "Initial container")
+	initialSHA := run("git", "rev-parse", "HEAD")
 	run("git", "tag", "v0.7.0-r0")
 	run("git", "commit", "--allow-empty", "-m", "Refresh dependencies\n\nDetailed body")
 	env["GITHUB_SHA"] = run("git", "rev-parse", "HEAD")
@@ -305,16 +331,18 @@ func TestChangelogIntegration(t *testing.T) {
 		}
 		return text
 	}
-	if first := notes(""); !strings.Contains(first, "Initial container") || !strings.Contains(first, "Refresh dependencies") {
+	initialEntry := "- Initial container ([" + initialSHA[:7] + "](https://github.com/tuxcrate/zrepl/commit/" + initialSHA + "))"
+	refreshEntry := "- Refresh dependencies ([" + env["GITHUB_SHA"][:7] + "](https://github.com/tuxcrate/zrepl/commit/" + env["GITHUB_SHA"] + "))"
+	if first := notes(""); !strings.Contains(first, initialEntry+"\n"+refreshEntry) {
 		t.Fatal(first)
 	}
 	text := notes("v0.7.0-r0")
-	for _, want := range []string{"Refresh dependencies", "https://github.com/tuxcrate/zrepl/commit/", "[Full diff]", env["IMAGE_DIGEST"]} {
+	for _, want := range []string{refreshEntry, env["IMAGE_DIGEST"]} {
 		if !strings.Contains(text, want) {
 			t.Errorf("missing %q in %s", want, text)
 		}
 	}
-	for _, absent := range []string{"Initial container", "Detailed body", "$REPOSITORY_URL"} {
+	for _, absent := range []string{"Initial container", "Detailed body", "$REPOSITORY_URL", "- Source:", "[Full diff]"} {
 		if strings.Contains(text, absent) {
 			t.Errorf("unexpected %q in %s", absent, text)
 		}
