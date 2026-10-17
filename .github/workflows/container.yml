@@ -59,6 +59,7 @@ jobs:
         run: '"$RUNNER_TEMP/container-release" plan'
 
   pull-request:
+    name: pull-request (${{ matrix.track }})
     needs: plan
     if: github.event_name == 'pull_request'
     strategy:
@@ -180,6 +181,7 @@ jobs:
           fi
 
   release:
+    name: release (${{ matrix.track }})
     needs: plan
     strategy:
       fail-fast: false
