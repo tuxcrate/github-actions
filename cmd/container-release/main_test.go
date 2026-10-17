@@ -265,12 +265,17 @@ func TestReleaseNotesFormatting(t *testing.T) {
 		}
 		return commandResult{}, nil
 	}
-	notes, err := a.releaseNotes("0.7.0", imageTags("0.7.0", 1), env["IMAGE"], env["IMAGE_DIGEST"], "")
+	tags := []string{"0.7.0-r1", "latest", "0.7.0", "0", "stable", "0.7"}
+	originalTags := append([]string(nil), tags...)
+	notes, err := a.releaseNotes("0.7.0", tags, env["IMAGE"], env["IMAGE_DIGEST"], "")
 	if err != nil {
 		t.Fatal(err)
 	}
+	if !reflect.DeepEqual(tags, originalTags) {
+		t.Fatalf("release notes changed image tags: %v", tags)
+	}
 	for _, want := range []string{
-		"- Moving aliases:\n  - `ghcr.io/tuxcrate/zrepl:0.7.0`\n  - `ghcr.io/tuxcrate/zrepl:0.7`\n  - `ghcr.io/tuxcrate/zrepl:latest`\n",
+		"- Moving aliases:\n  - `ghcr.io/tuxcrate/zrepl:0.7.0`\n  - `ghcr.io/tuxcrate/zrepl:0.7`\n  - `ghcr.io/tuxcrate/zrepl:0`\n  - `ghcr.io/tuxcrate/zrepl:latest`\n  - `ghcr.io/tuxcrate/zrepl:stable`\n",
 		"- Platforms: `linux/amd64`, `linux/arm64`\n",
 		"\n\n## Packaging changes\n\n",
 	} {

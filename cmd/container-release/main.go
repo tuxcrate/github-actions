@@ -225,8 +225,21 @@ func (a app) releaseNotes(version string, tags []string, image, digest, previous
 		}
 		changes = reason + "; no packaging commits since the previous release. Application version unchanged."
 	}
-	aliases := make([]string, 0, len(tags)-1)
-	for _, tag := range tags[1:] {
+	aliasTags := append([]string(nil), tags[1:]...)
+	sort.Slice(aliasTags, func(i, j int) bool {
+		left, right := aliasTags[i], aliasTags[j]
+		leftVersion := left == version || strings.HasPrefix(version, left+".")
+		rightVersion := right == version || strings.HasPrefix(version, right+".")
+		if leftVersion != rightVersion {
+			return leftVersion
+		}
+		if leftVersion {
+			return len(left) > len(right)
+		}
+		return left < right
+	})
+	aliases := make([]string, 0, len(aliasTags))
+	for _, tag := range aliasTags {
 		aliases = append(aliases, "  - `"+image+":"+tag+"`")
 	}
 	platforms := strings.Split(a.getenv("PLATFORMS"), ",")
