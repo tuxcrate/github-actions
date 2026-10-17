@@ -79,7 +79,7 @@ func TestUpstreamMetadata(t *testing.T) {
 	}
 	valid := upstream{Datasource: "deb", DepName: "zrepl", RegistryURL: registry, Version: "0.7.0-1"}
 	for _, mutate := range []func(*upstream){
-		func(u *upstream) { u.Datasource = "github-releases" },
+		func(u *upstream) { u.Datasource = "" },
 		func(u *upstream) { u.DepName = "bad package" },
 		func(u *upstream) { u.RegistryURL = "file:///etc/passwd" },
 		func(u *upstream) { u.RegistryURL = "https://example.com/apt" },
@@ -180,6 +180,54 @@ func TestPyPIUpstreamMetadata(t *testing.T) {
 	builds, err = a.builds()
 	if err != nil || builds[0].Version != "1.33.0" || builds[0].BuildArgs != "APP_VERSION=1.33.0" || builds[0].Aliases != `["1","1.33","latest"]` {
 		t.Fatalf("%v: %v", builds, err)
+	}
+}
+
+func TestDynamicUpstreamMetadata(t *testing.T) {
+	for _, source := range []struct{ datasource, depName string }{
+		{"github-releases", "example/app"},
+		{"npm", "@example/app"},
+		{"crate", "example-app"},
+		{"future-datasource", "example/app"},
+	} {
+		for _, version := range []string{"1.2.3", "2.0.0-rc.1"} {
+			t.Run(source.datasource+"/"+version, func(t *testing.T) {
+				config := `{"tracks":[{"name":"test","upstream":{"datasource":"` + source.datasource + `","depName":"` + source.depName + `","version":"` + version + `"},"aliases":[]}]}`
+				a, _ := configApp(t, config)
+				builds, err := a.builds()
+				if err != nil || len(builds) != 1 || builds[0].Version != version || builds[0].BuildArgs != "APP_VERSION="+version {
+					t.Fatalf("%v: %v", builds, err)
+				}
+			})
+		}
+	}
+	valid := upstream{Datasource: "github-releases", DepName: "example/app", Version: "1.2.3"}
+	for _, registry := range []string{"", "https://github.example.com", "https://example.com/releases?channel=stable"} {
+		u := valid
+		u.RegistryURL = registry
+		if err := u.validate(); err != nil {
+			t.Fatalf("%+v: %v", u, err)
+		}
+	}
+	for _, mutate := range []func(*upstream){
+		func(u *upstream) { u.Datasource = "" },
+		func(u *upstream) { u.Datasource = "bad source" },
+		func(u *upstream) { u.DepName = "" },
+		func(u *upstream) { u.DepName = "example/app\n" },
+		func(u *upstream) { u.DepName = "bad package" },
+		func(u *upstream) { u.Version = "" },
+		func(u *upstream) { u.Version = "1.2" },
+		func(u *upstream) { u.Version = "1.2.3\nARG=other" },
+		func(u *upstream) { u.RegistryURL = "file:///etc/passwd" },
+		func(u *upstream) { u.RegistryURL = "https:///releases" },
+		func(u *upstream) { u.RegistryURL = "https://user:secret@example.com" },
+		func(u *upstream) { u.RegistryURL = "https://example.com/#fragment" },
+	} {
+		u := valid
+		mutate(&u)
+		if err := u.validate(); err == nil {
+			t.Errorf("accepted invalid upstream: %+v", u)
+		}
 	}
 }
 
