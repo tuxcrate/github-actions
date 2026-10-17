@@ -68,6 +68,12 @@ jobs:
     timeout-minutes: 60
     permissions:
       contents: read
+      packages: write
+      pull-requests: write
+    env:
+      # Fork PRs stay build-only. Never use pull_request_target
+      # to give untrusted container builds access to registry credentials.
+      PUBLISH_PR: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
     steps:
       - name: Check out container sources
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -77,7 +83,32 @@ jobs:
         uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
       - name: Set up Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
-      - name: Build all platforms (never publish PRs)
+      - name: Prepare PR image tags
+        id: preview
+        env:
+          IMAGE_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          TRACK: ${{ matrix.track }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          image="ghcr.io/${IMAGE_REPOSITORY,,}-pr"
+          tag="pr-${PR_NUMBER}-${TRACK}"
+          {
+            echo "image=$image"
+            echo 'tags<<PR_IMAGE_TAGS'
+            echo "$image:$tag"
+            echo "$image:$tag-$COMMIT_SHA"
+            echo 'PR_IMAGE_TAGS'
+          } >> "$GITHUB_OUTPUT"
+      - name: Log in to GHCR for PR images
+        if: env.PUBLISH_PR == 'true'
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build all platforms and publish eligible PR images
+        id: build
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: ${{ matrix.context }}
@@ -88,12 +119,66 @@ jobs:
             APP_VERSION=${{ matrix.version }}
             BUILDKIT_DOCKERFILE_CHECK=skip=InvalidDefaultArgInFrom
           pull: true
-          push: false
+          push: ${{ env.PUBLISH_PR == 'true' }}
+          tags: ${{ steps.preview.outputs.tags }}
+          provenance: mode=max
+          sbom: true
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ matrix.version }}
           # Check current package availability on every architecture, including
           # reruns after an upstream repository finishes publishing a version.
           no-cache: true
-          cache-from: type=gha,scope=container-${{ matrix.track }}
-          cache-to: type=gha,mode=max,scope=container-${{ matrix.track }}
+          cache-from: type=gha,scope=container-pr-${{ github.event.pull_request.number }}-${{ matrix.track }}
+          cache-to: type=gha,mode=max,scope=container-pr-${{ github.event.pull_request.number }}-${{ matrix.track }}
+      - name: Comment PR image pull instructions
+        if: env.PUBLISH_PR == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          TRACK: ${{ matrix.track }}
+          IMAGE: ${{ steps.preview.outputs.image }}
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+          COMMIT_SHA: ${{ github.sha }}
+          PLATFORMS: ${{ matrix.platforms }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          marker="<!-- tuxcrate-pr-image:$TRACK -->"
+          tag="pr-${PR_NUMBER}-${TRACK}"
+          body="$(cat <<EOF
+          $marker
+          ### Container preview: \`$TRACK\`
+
+          Built for merge commit \`$COMMIT_SHA\` on \`$PLATFORMS\`.
+
+          Pull the latest build of this PR:
+          \`\`\`sh
+          docker pull $IMAGE:$tag
+          \`\`\`
+
+          Pull the build for this commit:
+          \`\`\`sh
+          docker pull $IMAGE:$tag-$COMMIT_SHA
+          \`\`\`
+
+          Pin this exact image (tags may change on reruns):
+          \`\`\`sh
+          docker pull $IMAGE@$IMAGE_DIGEST
+          \`\`\`
+
+          [Build details]($RUN_URL). Preview images are for testing, not production.
+          EOF
+          )"
+          comments="repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments"
+          comment_id="$(gh api --paginate --slurp "$comments" --jq \
+            "[.[][] | select(.user.login == \"github-actions[bot]\" and (.body | startswith(\"$marker\")))][0].id // empty")"
+          if [[ -n "$comment_id" ]]; then
+            gh api --method PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$comment_id" -f body="$body" --silent
+          else
+            gh api --method POST "$comments" -f body="$body" --silent
+          fi
 
   release:
     needs: plan
