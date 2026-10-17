@@ -18,9 +18,9 @@ jobs:
           persist-credentials: false
       - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2
         with:
-          tool: actionlint@1.7.7,git-cliff@2.14.2
+          tool: git-cliff@2.14.2
       - name: Lint workflows
-        run: actionlint
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
       - name: Test release logic and generated changelogs
         run: go test -race ./...
       - name: Vet Go code
