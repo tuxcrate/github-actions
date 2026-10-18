@@ -1,4 +1,4 @@
-package main
+package containerrelease
 
 import (
 	"encoding/json"
@@ -9,67 +9,9 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/tuxcrate/github-actions/internal/version"
 )
-
-func TestValidateVersion(t *testing.T) {
-	for _, version := range []string{"0.7.0", "1.0.0", "13.20.102", "0.7.0-rc1", "1.2.3-rc.1", "1.2.3-0"} {
-		if err := validateVersion(version); err != nil {
-			t.Error(err)
-		}
-	}
-	for _, version := range []string{"v0.7.0", "0.7", "01.7.0", "0.7.0-rc.01", "1.2.3+build", "1.2.3-r0", "1.2.3-rc.1-r3", "1.2.3-", "1.2.3-a..b", "0.7.0\n", "$(id)", "1.2.3-" + strings.Repeat("a", 101)} {
-		if validateVersion(version) == nil {
-			t.Errorf("accepted invalid version %q", version)
-		}
-	}
-}
-
-func TestNextRevision(t *testing.T) {
-	for _, tt := range []struct {
-		name, version string
-		tags          []string
-		want          uint64
-	}{
-		{"first", "0.7.0", nil, 0},
-		{"highest", "0.7.0", []string{"v0.7.0-r0", "v0.7.0-r12"}, 13},
-		{"reset", "0.7.1", []string{"v0.7.0-r12"}, 0},
-		{"unrelated", "0.7.0", []string{"v0.7.0-r01", "v0.7.0-r1-extra", "v0.7.0"}, 0},
-		{"prerelease", "0.8.0-rc.1", []string{"v0.8.0-rc.1-r2", "v0.8.0-rc.2-r8", "v0.8.0-r9"}, 3},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := nextRevision(tt.version, tt.tags)
-			if err != nil || got != tt.want {
-				t.Fatalf("got %d, %v; want %d", got, err, tt.want)
-			}
-		})
-	}
-	for _, tag := range []string{"v0.7.0-r18446744073709551615", "v0.7.0-r18446744073709551616"} {
-		if _, err := nextRevision("0.7.0", []string{tag}); err == nil {
-			t.Error("revision overflow accepted")
-		}
-	}
-	if _, err := nextRevision("invalid", nil); err == nil {
-		t.Error("invalid version accepted")
-	}
-}
-
-func TestImageTags(t *testing.T) {
-	want := []string{"0.7.0-r2", "0.7.0", "0.7", "latest"}
-	if got := imageTags("0.7.0", 2); !reflect.DeepEqual(got, want) {
-		t.Fatal(got)
-	}
-}
-
-func TestImageName(t *testing.T) {
-	if got, err := imageName("", "Tuxcrate/Zrepl"); err != nil || got != "ghcr.io/tuxcrate/zrepl" {
-		t.Fatalf("%s: %v", got, err)
-	}
-	for _, image := range []string{"docker.io/tuxcrate/zrepl", "ghcr.io/tuxcrate/zrepl:latest", "ghcr.io/tuxcrate/zrepl\ninjected"} {
-		if _, err := imageName(image, "tuxcrate/zrepl"); err == nil {
-			t.Errorf("accepted %q", image)
-		}
-	}
-}
 
 func testApp(t *testing.T) (app, map[string]string) {
 	t.Helper()
@@ -329,7 +271,7 @@ func TestChangelogIntegration(t *testing.T) {
 	run("git", "tag", "v0.7.0-r0")
 	run("git", "commit", "--allow-empty", "-m", "Refresh dependencies\n\nDetailed body")
 	env["GITHUB_SHA"] = run("git", "rev-parse", "HEAD")
-	tags := imageTags("0.7.0", 1)
+	tags := version.ImageTags("0.7.0", 1)
 	notes := func(previous string) string {
 		t.Helper()
 		text, err := a.releaseNotes("0.7.0", tags, env["IMAGE"], env["IMAGE_DIGEST"], previous)

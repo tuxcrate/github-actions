@@ -1,0 +1,227 @@
+package containerrelease
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"regexp"
+	"sort"
+	"strconv"
+	"strings"
+
+	"github.com/tuxcrate/github-actions/internal/releaseconfig"
+	releaseversion "github.com/tuxcrate/github-actions/internal/version"
+)
+
+var missingRE = regexp.MustCompile(`(?i)not found|manifest unknown|name_unknown`)
+
+func (a app) previousRelease(releases []release) (string, error) {
+	var candidates []release
+	for _, r := range releases {
+		track := a.trackName()
+		marker := "<!-- tuxcrate-track:" + track + " -->"
+		matchesTrack := strings.HasSuffix(strings.TrimSpace(r.Body), marker) || (track == "stable" && !r.Prerelease && !strings.Contains(r.Body, "<!-- tuxcrate-track:"))
+		if !r.Draft && matchesTrack && releaseversion.IsReleaseTag(r.TagName) {
+			candidates = append(candidates, r)
+		}
+	}
+	sort.SliceStable(candidates, func(i, j int) bool { return candidates[i].PublishedAt > candidates[j].PublishedAt })
+	for _, r := range candidates {
+		result, err := a.exec("", "git", "merge-base", "--is-ancestor", r.TagName, "HEAD")
+		if err != nil {
+			return "", err
+		}
+		switch result.code {
+		case 0:
+			return r.TagName, nil
+		case 1:
+			continue
+		default:
+			return "", fmt.Errorf("cannot resolve release tag %s: %s", r.TagName, result.stderr)
+		}
+	}
+	return "", nil
+}
+
+func (a app) assertTagAvailable(image, tag string) error {
+	result, err := a.exec("", "docker", "buildx", "imagetools", "inspect", image+":"+tag)
+	if err != nil {
+		return err
+	}
+	if result.code == 0 {
+		return fmt.Errorf("refusing to overwrite existing image %s:%s", image, tag)
+	}
+	// Fail closed on authentication, networking, and other registry errors.
+	if !missingRE.MatchString(result.stderr) {
+		return fmt.Errorf("cannot check whether image tag exists: %s", result.stderr)
+	}
+	return nil
+}
+
+func (a app) assertCurrentCommit() error {
+	head, err := a.run("", "gh", "api", "repos/"+a.getenv("GITHUB_REPOSITORY")+"/git/ref/heads/"+a.getenv("GITHUB_REF_NAME"), "--jq", ".object.sha")
+	if err != nil {
+		return err
+	}
+	if head != a.getenv("GITHUB_SHA") {
+		return errors.New("refusing to publish a stale default-branch commit; rerun on the current branch HEAD")
+	}
+	return nil
+}
+
+func (a app) releaseNotes(version string, tags []string, image, digest, previous string) (string, error) {
+	url := a.getenv("GITHUB_SERVER_URL") + "/" + a.getenv("GITHUB_REPOSITORY")
+	commitRange := "HEAD"
+	if previous != "" {
+		commitRange = previous + "..HEAD"
+	}
+	commits, err := a.run("", "git", "log", "--reverse", "--format=%H%x09%s", commitRange)
+	if err != nil {
+		return "", err
+	}
+	var changes string
+	if commits != "" {
+		var lines []string
+		for _, commit := range strings.Split(commits, "\n") {
+			sha, subject, ok := strings.Cut(commit, "\t")
+			if !ok || len(sha) < 7 {
+				return "", fmt.Errorf("invalid git log entry: %q", commit)
+			}
+			lines = append(lines, fmt.Sprintf("- %s ([%s](%s/commit/%s))", subject, sha[:7], url, sha))
+		}
+		changes = strings.Join(lines, "\n")
+	} else {
+		reason := "Image rebuild"
+		if a.getenv("GITHUB_EVENT_NAME") == "schedule" {
+			reason = "Scheduled security rebuild"
+		}
+		changes = reason + "; no packaging commits since the previous release. Application version unchanged."
+	}
+	aliasTags := append([]string(nil), tags[1:]...)
+	sort.Slice(aliasTags, func(i, j int) bool {
+		left, right := aliasTags[i], aliasTags[j]
+		leftVersion := left == version || strings.HasPrefix(version, left+".")
+		rightVersion := right == version || strings.HasPrefix(version, right+".")
+		if leftVersion != rightVersion {
+			return leftVersion
+		}
+		if leftVersion {
+			return len(left) > len(right)
+		}
+		return left < right
+	})
+	aliases := make([]string, 0, len(aliasTags))
+	for _, tag := range aliasTags {
+		aliases = append(aliases, "  - `"+image+":"+tag+"`")
+	}
+	platforms := strings.Split(a.getenv("PLATFORMS"), ",")
+	for i, platform := range platforms {
+		platforms[i] = "`" + strings.TrimSpace(platform) + "`"
+	}
+	notes := fmt.Sprintf("## Container image\n\n- Application version: `%s`\n- Immutable Image: `%s:%s@%s`\n- Moving aliases:\n%s\n- Platforms: %s\n\n## Packaging changes\n\n%s\n",
+		version, image, tags[0], digest, strings.Join(aliases, "\n"), strings.Join(platforms, ", "), changes)
+	return notes, nil
+}
+
+func (a app) metadata() error {
+	if err := releaseversion.Validate(a.getenv("APP_VERSION")); err != nil {
+		return err
+	}
+	image, err := releaseconfig.ImageName(a.getenv("IMAGE"), a.getenv("GITHUB_REPOSITORY"))
+	if err != nil {
+		return err
+	}
+	return a.output("image", image)
+}
+
+func (a app) reserve() error {
+	if !releaseconfig.ValidTrackName(a.trackName()) {
+		return errors.New("invalid release track name")
+	}
+	// Concurrency does not guarantee queue ordering. Old reruns must not
+	// roll moving aliases back after a newer default-branch commit released.
+	if err := a.assertCurrentCommit(); err != nil {
+		return err
+	}
+	version := a.getenv("APP_VERSION")
+	if err := releaseversion.Validate(version); err != nil {
+		return err
+	}
+	image, err := releaseconfig.ImageName(a.getenv("IMAGE"), a.getenv("GITHUB_REPOSITORY"))
+	if err != nil {
+		return err
+	}
+	digest := a.getenv("IMAGE_DIGEST")
+	if !releaseconfig.ValidDigest(digest) {
+		return errors.New("build did not return a valid image digest")
+	}
+	repository := a.getenv("GITHUB_REPOSITORY")
+	data, err := a.run("", "gh", "api", "--paginate", "--slurp", "repos/"+repository+"/releases?per_page=100")
+	if err != nil {
+		return err
+	}
+	var pages [][]release
+	if err := json.Unmarshal([]byte(data), &pages); err != nil {
+		return fmt.Errorf("decode release history: %w", err)
+	}
+	gitTags, err := a.run("", "git", "tag", "--list")
+	if err != nil {
+		return err
+	}
+	tags := strings.Split(gitTags, "\n")
+	var releases []release
+	for _, page := range pages {
+		for _, r := range page {
+			releases = append(releases, r)
+			// Drafts durably reserve revisions even after failed publication.
+			tags = append(tags, r.TagName)
+		}
+	}
+	revision, err := releaseversion.NextRevision(version, tags)
+	if err != nil {
+		return err
+	}
+	tags, err = a.tags(version, revision)
+	if err != nil {
+		return err
+	}
+	tag := "v" + tags[0]
+	if err := a.assertTagAvailable(image, tags[0]); err != nil {
+		return err
+	}
+	previous, err := a.previousRelease(releases)
+	if err != nil {
+		return err
+	}
+	notes, err := a.releaseNotes(version, tags, image, digest, previous)
+	if err != nil {
+		return err
+	}
+	track := a.trackName()
+	notes += "\n<!-- tuxcrate-track:" + track + " -->\n"
+	payload, err := json.Marshal(releaseRequest{
+		TagName:         tag,
+		TargetCommitish: a.getenv("GITHUB_SHA"),
+		Name:            tags[0],
+		Draft:           true,
+		Prerelease:      strings.Contains(version, "-"),
+		Body:            notes,
+	})
+	if err != nil {
+		return err
+	}
+	// Reserve before exposing named tags. Retain failed drafts, never reuse them.
+	if _, err := a.run(string(payload), "gh", "api", "--method", "POST", "repos/"+repository+"/releases", "--input", "-"); err != nil {
+		return err
+	}
+	if err := a.output("tag", tag); err != nil {
+		return err
+	}
+	if err := a.output("tags", strings.Join(tags, "\n")); err != nil {
+		return err
+	}
+	if err := a.output("latest", strconv.FormatBool(!strings.Contains(version, "-") && contains(tags[1:], "latest"))); err != nil {
+		return err
+	}
+	return appendFile(a.getenv("GITHUB_STEP_SUMMARY"), "# "+tags[0]+"\n\n"+notes)
+}
