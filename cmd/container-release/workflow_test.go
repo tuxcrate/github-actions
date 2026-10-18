@@ -69,7 +69,7 @@ func TestWorkflowRequiresRootMetadata(t *testing.T) {
 			if err := check(); err != nil {
 				t.Fatalf("rejected root metadata: %v", err)
 			}
-		case "Validate root meta.yaml and alias ownership":
+		case "Validate root meta.yaml and tag ownership":
 			planned = true
 			if !required || s.WorkingDirectory != "source" || len(s.Env) != 0 {
 				t.Fatal("planner must validate the fixed root metadata after the preflight")
@@ -223,13 +223,14 @@ func TestWorkflowPRImages(t *testing.T) {
 				t.Fatal("all PRs must generate and validate a temporary release.json")
 			}
 			for key, want := range map[string]string{
-				"APP_VERSION":  "${{ matrix.version }}",
-				"TRACK":        "${{ matrix.track }}",
-				"ALIASES":      "${{ matrix.aliases }}",
-				"IMAGE":        "${{ matrix.image }}",
-				"IMAGE_DIGEST": "${{ steps.local-image.outputs.imageid }}",
-				"PLATFORMS":    "${{ matrix.platforms }}",
-				"LOCAL_IMAGE":  "tuxcrate-pr-os-check:${{ matrix.track }}",
+				"APP_VERSION":   "${{ matrix.version }}",
+				"TRACK":         "${{ matrix.track }}",
+				"IMAGE_VERSION": "${{ matrix.image-version }}",
+				"TAGS":          "${{ matrix.tags }}",
+				"IMAGE":         "${{ matrix.image }}",
+				"IMAGE_DIGEST":  "${{ steps.local-image.outputs.imageid }}",
+				"PLATFORMS":     "${{ matrix.platforms }}",
+				"LOCAL_IMAGE":   "tuxcrate-pr-os-check:${{ matrix.track }}",
 			} {
 				if s.Env[key] != want {
 					t.Fatalf("validation environment %s: got %q, want %q", key, s.Env[key], want)

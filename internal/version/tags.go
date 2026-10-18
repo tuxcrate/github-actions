@@ -11,26 +11,51 @@ var (
 	numericSeriesRE = regexp.MustCompile(`^[0-9]+(\.[0-9]+)*$`)
 )
 
-// ImageTags returns the default immutable tag and moving aliases.
-// The application version must have passed Validate.
-func ImageTags(version string, revision uint64) []string {
-	if strings.Contains(version, "-") {
-		return []string{fmt.Sprintf("%s-r%d", version, revision), version, "preview"}
+// ResolveTags expands explicit tag templates and identifies the single version
+// tag from which immutable image and Git release revisions are derived.
+func ResolveTags(appVersion string, templates []string, prerelease bool) (string, []string, error) {
+	if err := Validate(appVersion); err != nil {
+		return "", nil, err
 	}
-	parts := strings.Split(version, ".")
-	return []string{fmt.Sprintf("%s-r%d", version, revision), version, parts[0] + "." + parts[1], "latest"}
+	parts := strings.SplitN(appVersion, ".", 3)
+	replacer := strings.NewReplacer("${version}", appVersion, "${major}", parts[0], "${minor}", parts[1])
+	tags := make([]string, len(templates))
+	imageVersion := ""
+	for i, template := range templates {
+		tags[i] = replacer.Replace(template)
+		if strings.Contains(template, "${version}") {
+			if imageVersion != "" || strings.Count(template, "${version}") != 1 ||
+				(template != "${version}" && !strings.HasPrefix(template, "${version}-")) {
+				return "", nil, fmt.Errorf("tags require exactly one ${version} template, optionally followed by a suffix")
+			}
+			imageVersion = tags[i]
+		}
+	}
+	if imageVersion == "" {
+		return "", nil, fmt.Errorf("tags require exactly one template containing ${version}")
+	}
+	if err := ValidateImageVersion(appVersion, imageVersion); err != nil {
+		return "", nil, err
+	}
+	if err := ValidateTags(imageVersion, tags, prerelease || strings.Contains(appVersion, "-")); err != nil {
+		return "", nil, err
+	}
+	return imageVersion, tags, nil
 }
 
-// ExpandAliases substitutes major and minor placeholders in configured aliases.
-// The application version must have passed Validate.
-func ExpandAliases(version string, aliases []string) []string {
-	parts := strings.SplitN(version, ".", 3)
-	replacer := strings.NewReplacer("{major}", parts[0], "{minor}", parts[1])
-	expanded := make([]string, len(aliases))
-	for i, alias := range aliases {
-		expanded[i] = replacer.Replace(alias)
+// ValidateImageVersion keeps the installation version separate from its optional
+// packaging suffix without allowing unrelated application versions to be tagged.
+func ValidateImageVersion(appVersion, imageVersion string) error {
+	if err := Validate(appVersion); err != nil {
+		return err
 	}
-	return expanded
+	if err := Validate(imageVersion); err != nil {
+		return fmt.Errorf("invalid image version: %w", err)
+	}
+	if imageVersion != appVersion && !strings.HasPrefix(imageVersion, appVersion+"-") {
+		return fmt.Errorf("image version must be the application version with an optional suffix")
+	}
+	return nil
 }
 
 // ValidImageTag reports whether tag is a valid container image tag.
@@ -38,28 +63,29 @@ func ValidImageTag(tag string) bool {
 	return aliasRE.MatchString(tag)
 }
 
-// ValidateAliases rejects reserved, duplicate, or unsafe moving aliases.
-func ValidateAliases(version string, aliases []string) error {
-	seen := map[string]bool{version: true}
-	for _, alias := range aliases {
-		if !aliasRE.MatchString(alias) || versionRE.MatchString(alias) || releaseRE.MatchString("v"+alias) || seen[alias] {
-			return fmt.Errorf("invalid, reserved, or duplicate alias %q", alias)
-		}
-		seen[alias] = true
+// ValidateTags validates expanded tags, including the required image version.
+// Full versions other than imageVersion and revision-shaped tags are reserved.
+func ValidateTags(imageVersion string, tags []string, prerelease bool) error {
+	if err := Validate(imageVersion); err != nil {
+		return fmt.Errorf("invalid image version: %w", err)
 	}
-	if strings.Contains(version, "-") {
-		return ValidatePrereleaseAliases(aliases)
+	prerelease = prerelease || strings.Contains(imageVersion, "-")
+	if prerelease && !strings.Contains(imageVersion, "-") {
+		return fmt.Errorf("prerelease image version must have a suffix")
 	}
-	return nil
-}
-
-// ValidatePrereleaseAliases prevents a prerelease track from owning stable aliases,
-// including when upstream versions have no prerelease suffix.
-func ValidatePrereleaseAliases(aliases []string) error {
-	for _, alias := range aliases {
-		if alias == "latest" || alias == "stable" || numericSeriesRE.MatchString(alias) {
-			return fmt.Errorf("prerelease cannot own stable alias %q", alias)
+	seen := map[string]bool{}
+	for _, tag := range tags {
+		if !ValidImageTag(tag) || seen[tag] || releaseRE.MatchString("v"+tag) ||
+			(versionRE.MatchString(tag) && tag != imageVersion) {
+			return fmt.Errorf("invalid, reserved, or duplicate tag %q", tag)
 		}
+		if prerelease && (tag == "latest" || tag == "stable" || numericSeriesRE.MatchString(tag)) {
+			return fmt.Errorf("prerelease cannot own stable tag %q", tag)
+		}
+		seen[tag] = true
+	}
+	if !seen[imageVersion] {
+		return fmt.Errorf("tags must include image version %q", imageVersion)
 	}
 	return nil
 }

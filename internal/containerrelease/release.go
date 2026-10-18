@@ -151,6 +151,14 @@ func (a app) reserve() error {
 	if err := releaseversion.Validate(version); err != nil {
 		return err
 	}
+	imageVersion := a.getenv("IMAGE_VERSION")
+	if err := releaseversion.ValidateImageVersion(version, imageVersion); err != nil {
+		return err
+	}
+	// Validate all publication tags before consulting history or reserving a draft.
+	if _, err := a.tags(imageVersion, 0); err != nil {
+		return err
+	}
 	image, err := releaseconfig.ImageName(a.getenv("IMAGE"), a.getenv("GITHUB_REPOSITORY"))
 	if err != nil {
 		return err
@@ -181,11 +189,11 @@ func (a app) reserve() error {
 			tags = append(tags, r.TagName)
 		}
 	}
-	revision, err := releaseversion.NextRevision(version, tags)
+	revision, err := releaseversion.NextRevision(imageVersion, tags)
 	if err != nil {
 		return err
 	}
-	tags, err = a.tags(version, revision)
+	tags, err = a.tags(imageVersion, revision)
 	if err != nil {
 		return err
 	}

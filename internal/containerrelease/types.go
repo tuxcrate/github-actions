@@ -40,6 +40,7 @@ type releaseManifest struct {
 	Image         string   `json:"image"`
 	Track         string   `json:"track"`
 	Version       string   `json:"version"`
+	ImageVersion  string   `json:"imageVersion"`
 	Revision      uint64   `json:"revision"`
 	ImmutableTag  string   `json:"immutableTag"`
 	Digest        string   `json:"digest"`
