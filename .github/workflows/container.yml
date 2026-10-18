@@ -141,6 +141,10 @@ jobs:
           pull: true
           push: ${{ env.PUBLISH_PR == 'true' }}
           tags: ${{ steps.preview.outputs.tags }}
+          # Preserve ownership even when a rerun leaves an older index untagged.
+          annotations: |
+            index:io.tuxcrate.repository=${{ github.repository }}
+            index:io.tuxcrate.pull-request=${{ github.event.pull_request.number }}
           provenance: mode=max
           sbom: true
           labels: |
