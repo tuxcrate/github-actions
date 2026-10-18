@@ -7,9 +7,9 @@ import (
 
 func TestUpstreamMetadata(t *testing.T) {
 	registry := "https://zrepl.cschwarz.com/apt/debian?suite=trixie&components=main&binaryArch=amd64"
-	config := `{"tracks":[{"name":"stable","upstream":{"datasource":"deb","depName":"zrepl","registryUrl":"` + registry + `","version":"0.7.0-1"},"aliases":["{major}.{minor}","latest"]}]}`
+	config := `{"tracks":[{"name":"stable","upstream":{"datasource":"deb","depName":"zrepl","registryUrl":"` + registry + `","version":"0.7.0-1"},"tags":["${version}","${major}.${minor}","latest"]}]}`
 	builds, err := Plan(strings.NewReader(config), "tuxcrate/zrepl")
-	if err != nil || builds[0].Version != "0.7.0" || builds[0].BuildArgs != "APP_VERSION=0.7.0-1" || builds[0].Aliases != `["0.7","latest"]` || builds[0].Platforms != "linux/amd64,linux/arm64" {
+	if err != nil || builds[0].Version != "0.7.0" || builds[0].ImageVersion != "0.7.0" || builds[0].BuildArgs != "APP_VERSION=0.7.0-1" || builds[0].Tags != `["0.7.0","0.7","latest"]` || builds[0].Platforms != "linux/amd64,linux/arm64" {
 		t.Fatalf("%v: %v", builds, err)
 	}
 	valid := upstream{Datasource: "deb", DepName: "zrepl", RegistryURL: registry, Version: "0.7.0-1"}
@@ -54,9 +54,9 @@ func TestUpstreamMetadata(t *testing.T) {
 }
 
 func TestPyPIUpstreamMetadata(t *testing.T) {
-	config := `{"tracks":[{"name":"stable","upstream":{"datasource":"pypi","depName":"gallery-dl","version":"1.32.16"},"aliases":["{major}","{major}.{minor}","latest"]}]}`
+	config := `{"tracks":[{"name":"stable","upstream":{"datasource":"pypi","depName":"gallery-dl","version":"1.32.16"},"tags":["${version}","${major}","${major}.${minor}","latest"]}]}`
 	builds, err := Plan(strings.NewReader(config), "tuxcrate/zrepl")
-	if err != nil || len(builds) != 1 || builds[0].Version != "1.32.16" || builds[0].BuildArgs != "APP_VERSION=1.32.16" || builds[0].Aliases != `["1","1.32","latest"]` {
+	if err != nil || len(builds) != 1 || builds[0].Version != "1.32.16" || builds[0].BuildArgs != "APP_VERSION=1.32.16" || builds[0].Tags != `["1.32.16","1","1.32","latest"]` {
 		t.Fatalf("%v: %v", builds, err)
 	}
 	valid := upstream{Datasource: "pypi", DepName: "gallery-dl", Version: "1.32.16"}
@@ -108,7 +108,7 @@ func TestPyPIUpstreamMetadata(t *testing.T) {
 		}
 	}
 	builds, err = Plan(strings.NewReader(strings.ReplaceAll(config, "1.32.16", "1.33.0")), "tuxcrate/zrepl")
-	if err != nil || builds[0].Version != "1.33.0" || builds[0].BuildArgs != "APP_VERSION=1.33.0" || builds[0].Aliases != `["1","1.33","latest"]` {
+	if err != nil || builds[0].Version != "1.33.0" || builds[0].BuildArgs != "APP_VERSION=1.33.0" || builds[0].Tags != `["1.33.0","1","1.33","latest"]` {
 		t.Fatalf("%v: %v", builds, err)
 	}
 }
@@ -122,7 +122,7 @@ func TestDynamicUpstreamMetadata(t *testing.T) {
 	} {
 		for _, version := range []string{"1.2.3", "2.0.0-rc.1"} {
 			t.Run(source.datasource+"/"+version, func(t *testing.T) {
-				config := `{"tracks":[{"name":"test","upstream":{"datasource":"` + source.datasource + `","depName":"` + source.depName + `","version":"` + version + `"},"aliases":[]}]}`
+				config := `{"tracks":[{"name":"test","upstream":{"datasource":"` + source.datasource + `","depName":"` + source.depName + `","version":"` + version + `"},"tags":["${version}"]}]}`
 				builds, err := Plan(strings.NewReader(config), "tuxcrate/zrepl")
 				if err != nil || len(builds) != 1 || builds[0].Version != version || builds[0].BuildArgs != "APP_VERSION="+version {
 					t.Fatalf("%v: %v", builds, err)
@@ -178,7 +178,8 @@ func TestStrictYAMLConfiguration(t *testing.T) {
 		"baseImage: debian:13-slim\ntracks: []\n",
 		"tracks: []\ntracks: []\n",
 		"tracks: []\n---\ntracks: []\n",
-		"tracks:\n  - name: stable\n    version: '1.2.3'\n    aliases: []\n    unknownField: true\n",
+		"tracks:\n  - name: stable\n    version: '1.2.3'\n    tags: ['${version}']\n    unknownField: true\n",
+		"tracks:\n  - name: stable\n    version: '1.2.3'\n    aliases: []\n",
 	} {
 		if _, err := decodeConfig(strings.NewReader(config)); err == nil {
 			t.Errorf("accepted invalid YAML configuration %q", config)

@@ -1,7 +1,6 @@
 package version
 
 import (
-	"reflect"
 	"strings"
 	"testing"
 )
@@ -31,6 +30,8 @@ func TestNextRevision(t *testing.T) {
 		{"four-part", "4.0.20.3014", []string{"v4.0.20.3014-r0", "v4.0.20.3014-r12", "v4.0.20.3013-r20"}, 13},
 		{"unrelated", "0.7.0", []string{"v0.7.0-r01", "v0.7.0-r1-extra", "v0.7.0"}, 0},
 		{"prerelease", "0.8.0-rc.1", []string{"v0.8.0-rc.1-r2", "v0.8.0-rc.2-r8", "v0.8.0-r9"}, 3},
+		{"suffixed namespace starts fresh", "5.0.0.2668-prerelease", []string{"v5.0.0.2668-r9"}, 0},
+		{"suffixed namespace includes migrated tags", "5.0.0.2668-prerelease", []string{"v5.0.0.2668-r99", "v5.0.0.2668-prerelease-r2"}, 3},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			got, err := NextRevision(tt.version, tt.tags)
@@ -46,13 +47,6 @@ func TestNextRevision(t *testing.T) {
 	}
 	if _, err := NextRevision("invalid", nil); err == nil {
 		t.Error("invalid version accepted")
-	}
-}
-
-func TestImageTags(t *testing.T) {
-	want := []string{"0.7.0-r2", "0.7.0", "0.7", "latest"}
-	if got := ImageTags("0.7.0", 2); !reflect.DeepEqual(got, want) {
-		t.Fatal(got)
 	}
 }
 

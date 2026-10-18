@@ -11,7 +11,7 @@ type track struct {
 	Version       string            `yaml:"version"`
 	Prerelease    bool              `yaml:"prerelease,omitempty"`
 	BaseImage     string            `yaml:"baseImage,omitempty"`
-	Aliases       []string          `yaml:"aliases"`
+	Tags          []string          `yaml:"tags"`
 	Context       string            `yaml:"context,omitempty"`
 	Containerfile string            `yaml:"containerfile,omitempty"`
 	Platforms     string            `yaml:"platforms,omitempty"`
@@ -30,9 +30,10 @@ type upstream struct {
 type Build struct {
 	Track         string `json:"track"`
 	Version       string `json:"version"`
+	ImageVersion  string `json:"image-version"`
 	Prerelease    bool   `json:"prerelease"`
 	Image         string `json:"image"`
-	Aliases       string `json:"aliases"` // JSON array, including an explicit empty array.
+	Tags          string `json:"tags"` // JSON array of all expanded moving tags.
 	Context       string `json:"context"`
 	Containerfile string `json:"containerfile"`
 	Platforms     string `json:"platforms"`

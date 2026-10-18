@@ -9,8 +9,6 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-
-	"github.com/tuxcrate/github-actions/internal/version"
 )
 
 func testApp(t *testing.T) (app, map[string]string) {
@@ -18,6 +16,7 @@ func testApp(t *testing.T) (app, map[string]string) {
 	dir := t.TempDir()
 	env := map[string]string{
 		"APP_VERSION": "0.7.0", "IMAGE": "ghcr.io/tuxcrate/zrepl",
+		"IMAGE_VERSION": "0.7.0", "TAGS": `["0.7.0","0.7","latest"]`,
 		"IMAGE_DIGEST":      "sha256:" + strings.Repeat("a", 64),
 		"GITHUB_REPOSITORY": "tuxcrate/zrepl", "GITHUB_REF_NAME": "main",
 		"GITHUB_SHA": strings.Repeat("b", 40), "GITHUB_SERVER_URL": "https://github.com",
@@ -46,20 +45,21 @@ func stubReleaseOS(t *testing.T, a *app, env map[string]string) {
 func TestNumericPrereleaseReservation(t *testing.T) {
 	a, env := testApp(t)
 	env["APP_VERSION"] = "5.0.0.2668"
+	env["IMAGE_VERSION"] = "5.0.0.2668-prerelease"
 	env["PRERELEASE"] = "true"
 	env["TRACK"] = "develop"
-	env["ALIASES"] = `["develop","preview"]`
+	env["TAGS"] = `["5.0.0.2668-prerelease","develop","preview"]`
 	posted := false
 	a.exec = func(input string, args ...string) (commandResult, error) {
 		switch {
 		case args[0] == "gh" && args[1] == "api" && strings.HasPrefix(args[2], "repos/"):
 			return commandResult{stdout: env["GITHUB_SHA"]}, nil
 		case args[0] == "gh" && args[2] == "--paginate":
-			return commandResult{stdout: `[[{"tag_name":"v5.0.0.2668-r2","draft":true}]]`}, nil
+			return commandResult{stdout: `[[{"tag_name":"v5.0.0.2668-r99","draft":true},{"tag_name":"v5.0.0.2668-prerelease-r2","draft":true}]]`}, nil
 		case args[0] == "git" && args[1] == "tag":
 			return commandResult{}, nil
 		case args[0] == "docker":
-			if args[len(args)-1] != "ghcr.io/tuxcrate/zrepl:5.0.0.2668-r3" {
+			if args[len(args)-1] != "ghcr.io/tuxcrate/zrepl:5.0.0.2668-prerelease-r3" {
 				t.Fatal(args)
 			}
 			return commandResult{code: 1, stderr: "not found"}, nil
@@ -70,7 +70,7 @@ func TestNumericPrereleaseReservation(t *testing.T) {
 			if err := json.Unmarshal([]byte(input), &payload); err != nil {
 				t.Fatal(err)
 			}
-			if !payload.Prerelease || payload.TagName != "v5.0.0.2668-r3" || !strings.Contains(payload.Body, "<!-- tuxcrate-track:develop -->") {
+			if !payload.Prerelease || payload.TagName != "v5.0.0.2668-prerelease-r3" || !strings.Contains(payload.Body, "<!-- tuxcrate-track:develop -->") || !strings.Contains(payload.Body, "Application version: `5.0.0.2668`") {
 				t.Fatal(payload)
 			}
 			posted = true
@@ -88,7 +88,7 @@ func TestNumericPrereleaseReservation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !posted || !strings.Contains(string(data), "latest<<TUXCRATE_OUTPUT\nfalse\n") || !strings.Contains(string(data), "5.0.0.2668-r3\n5.0.0.2668\ndevelop\npreview\n") {
+	if !posted || !strings.Contains(string(data), "latest<<TUXCRATE_OUTPUT\nfalse\n") || !strings.Contains(string(data), "5.0.0.2668-prerelease-r3\n5.0.0.2668-prerelease\ndevelop\npreview\n") {
 		t.Fatal(string(data))
 	}
 }
@@ -363,7 +363,10 @@ func TestChangelogIntegration(t *testing.T) {
 	run("git", "tag", "v0.7.0-r0")
 	run("git", "commit", "--allow-empty", "-m", "Refresh dependencies\n\nDetailed body")
 	env["GITHUB_SHA"] = run("git", "rev-parse", "HEAD")
-	tags := version.ImageTags("0.7.0", 1)
+	tags, err := a.tags("0.7.0", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
 	notes := func(previous string) string {
 		t.Helper()
 		text, err := a.releaseNotes("0.7.0", tags, env["IMAGE"], env["IMAGE_DIGEST"], previous)

@@ -29,7 +29,7 @@ func (a app) checkManifest() error {
 	getenv := a.getenv
 	a.getenv = func(key string) string {
 		if key == "RELEASE_TAG" {
-			return "v" + getenv("APP_VERSION") + "-r0"
+			return "v" + getenv("IMAGE_VERSION") + "-r0"
 		}
 		return getenv(key)
 	}
@@ -45,13 +45,17 @@ func (a app) writeManifest(localImage string) error {
 	}
 	tag := a.getenv("RELEASE_TAG")
 	tagVersion, revision, err := releaseversion.ParseReleaseTag(tag)
-	if tagVersion != version {
-		return errors.New("release tag does not match application version")
-	}
 	if err != nil {
 		return err
 	}
-	tags, err := a.tags(version, revision)
+	imageVersion := a.getenv("IMAGE_VERSION")
+	if err := releaseversion.ValidateImageVersion(version, imageVersion); err != nil {
+		return err
+	}
+	if tagVersion != imageVersion {
+		return errors.New("release tag does not match image version")
+	}
+	tags, err := a.tags(imageVersion, revision)
 	if err != nil {
 		return err
 	}
@@ -87,10 +91,11 @@ func (a app) writeManifest(localImage string) error {
 		return err
 	}
 	data, err := json.MarshalIndent(releaseManifest{
-		SchemaVersion: 1,
+		SchemaVersion: 2,
 		Image:         image,
 		Track:         track,
 		Version:       version,
+		ImageVersion:  imageVersion,
 		Revision:      revision,
 		ImmutableTag:  tags[0],
 		Digest:        a.getenv("IMAGE_DIGEST"),
