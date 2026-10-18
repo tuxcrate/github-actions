@@ -54,7 +54,7 @@ func TestFourPartPrereleaseTracks(t *testing.T) {
       depName: Sonarr/Sonarr
       version: "5.0.0.2668"
     prerelease: true
-    aliases: [develop, preview]
+    aliases: ["{major}-prerelease", "{major}.{minor}-prerelease"]
     buildArgs:
       SONARR_BRANCH: develop
 `
@@ -62,11 +62,11 @@ func TestFourPartPrereleaseTracks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(builds) != 2 || builds[0].Prerelease || !builds[1].Prerelease || builds[0].Aliases != `["4","4.0","latest"]` || builds[1].Aliases != `["develop","preview"]` || builds[1].BuildArgs != "APP_VERSION=5.0.0.2668\nSONARR_BRANCH=develop" {
+	if len(builds) != 2 || builds[0].Prerelease || !builds[1].Prerelease || builds[0].Aliases != `["4","4.0","latest"]` || builds[1].Aliases != `["5-prerelease","5.0-prerelease"]` || builds[1].BuildArgs != "APP_VERSION=5.0.0.2668\nSONARR_BRANCH=develop" {
 		t.Fatal(builds)
 	}
 	for _, alias := range []string{"latest", "stable", "5", "5.0", "5.0.0", "5.0.0.2668"} {
-		bad := strings.Replace(config, "[develop, preview]", "["+alias+"]", 1)
+		bad := strings.Replace(config, `["{major}-prerelease", "{major}.{minor}-prerelease"]`, "["+alias+"]", 1)
 		if _, err := Plan(strings.NewReader(bad), "tuxcrate/sonarr"); err == nil {
 			t.Errorf("accepted prerelease alias %q", alias)
 		}
