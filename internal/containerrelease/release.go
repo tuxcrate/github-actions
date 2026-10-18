@@ -115,11 +115,15 @@ func (a app) releaseNotes(version string, tags []string, image, digest, previous
 		aliases = append(aliases, "  - `"+image+":"+tag+"`")
 	}
 	platforms := strings.Split(a.getenv("PLATFORMS"), ",")
+	flavor, osVersion, err := a.imageOS(image+"@"+digest, strings.TrimSpace(platforms[0]))
+	if err != nil {
+		return "", err
+	}
 	for i, platform := range platforms {
 		platforms[i] = "`" + strings.TrimSpace(platform) + "`"
 	}
-	notes := fmt.Sprintf("## Container image\n\n- Application version: `%s`\n- Immutable Image: `%s:%s@%s`\n- Moving aliases:\n%s\n- Platforms: %s\n\n## Packaging changes\n\n%s\n",
-		version, image, tags[0], digest, strings.Join(aliases, "\n"), strings.Join(platforms, ", "), changes)
+	notes := fmt.Sprintf("## Container image\n\n- Application version: `%s`\n- OS: `%s/%s`\n- Immutable Image: `%s:%s@%s`\n- Moving aliases:\n%s\n- Platforms: %s\n\n## Packaging changes\n\n%s\n",
+		version, strings.ToUpper(flavor[:1])+flavor[1:], osVersion, image, tags[0], digest, strings.Join(aliases, "\n"), strings.Join(platforms, ", "), changes)
 	return notes, nil
 }
 
