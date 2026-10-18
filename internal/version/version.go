@@ -11,7 +11,7 @@ import (
 
 // CorePattern matches the X.Y.Z portion of an application version.
 const CorePattern = `(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)`
-const appVersionPattern = CorePattern + `(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?`
+const appVersionPattern = CorePattern + `(\.(0|[1-9][0-9]*))?(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?`
 
 var (
 	versionRE = regexp.MustCompile(`^` + appVersionPattern + `$`)
@@ -21,7 +21,7 @@ var (
 // Validate checks the application version and reserved revision namespace.
 func Validate(version string) error {
 	if !versionRE.MatchString(version) || len(version) > 106 {
-		return errors.New("app-version must be X.Y.Z with an optional SemVer prerelease, no v prefix or build metadata, at most 106 characters")
+		return errors.New("app-version must be X.Y.Z or X.Y.Z.W with an optional prerelease suffix, no v prefix or build metadata, at most 106 characters")
 	}
 	if releaseRE.MatchString("v" + version) {
 		return errors.New("app-version must not end in -rN: that namespace is reserved for image revisions")

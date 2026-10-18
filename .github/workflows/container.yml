@@ -180,6 +180,7 @@ jobs:
           APP_VERSION: ${{ matrix.version }}
           TRACK: ${{ matrix.track }}
           ALIASES: ${{ matrix.aliases }}
+          PRERELEASE: ${{ matrix.prerelease }}
           IMAGE: ${{ matrix.image }}
           # This is a local image ID, not a published multiarch digest. The
           # generated manifest is only a validation fixture, never a release.
@@ -332,6 +333,7 @@ jobs:
           APP_VERSION: ${{ matrix.version }}
           TRACK: ${{ matrix.track }}
           ALIASES: ${{ matrix.aliases }}
+          PRERELEASE: ${{ matrix.prerelease }}
           IMAGE: ${{ steps.metadata.outputs.image }}
           IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
           PLATFORMS: ${{ matrix.platforms }}
@@ -342,6 +344,7 @@ jobs:
           APP_VERSION: ${{ matrix.version }}
           TRACK: ${{ matrix.track }}
           ALIASES: ${{ matrix.aliases }}
+          PRERELEASE: ${{ matrix.prerelease }}
           IMAGE: ${{ steps.metadata.outputs.image }}
           IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
           PLATFORMS: ${{ matrix.platforms }}

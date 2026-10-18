@@ -66,6 +66,12 @@ func Plan(r io.Reader, repository string) ([]Build, error) {
 		if err := version.ValidateAliases(t.Version, t.Aliases); err != nil {
 			return nil, fmt.Errorf("track %s: %w", t.Name, err)
 		}
+		prerelease := t.Prerelease || strings.Contains(t.Version, "-")
+		if prerelease {
+			if err := version.ValidatePrereleaseAliases(t.Aliases); err != nil {
+				return nil, fmt.Errorf("track %s: %w", t.Name, err)
+			}
+		}
 		for _, tag := range append([]string{t.Version}, t.Aliases...) {
 			if owner, exists := owners[tag]; exists {
 				return nil, fmt.Errorf("tag %q is owned by both %s and %s", tag, owner, t.Name)
@@ -74,6 +80,7 @@ func Plan(r io.Reader, repository string) ([]Build, error) {
 		}
 		b := defaults
 		b.Track, b.Version = t.Name, t.Version
+		b.Prerelease = prerelease
 		appVersion := t.Version
 		if t.Upstream != nil {
 			appVersion = t.Upstream.Version

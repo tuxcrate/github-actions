@@ -21,14 +21,21 @@ func (a app) trackName() string {
 	if name := a.getenv("TRACK"); name != "" {
 		return name
 	}
-	if strings.Contains(a.getenv("APP_VERSION"), "-") {
+	if a.isPrerelease() {
 		return "preview"
 	}
 	return "stable"
 }
 
+func (a app) isPrerelease() bool {
+	return a.getenv("PRERELEASE") == "true" || strings.Contains(a.getenv("APP_VERSION"), "-")
+}
+
 func (a app) tags(appVersion string, revision uint64) ([]string, error) {
 	if a.getenv("ALIASES") == "" {
+		if a.isPrerelease() {
+			return []string{fmt.Sprintf("%s-r%d", appVersion, revision), appVersion, "preview"}, nil
+		}
 		return version.ImageTags(appVersion, revision), nil
 	}
 	var aliases []string
@@ -37,6 +44,11 @@ func (a app) tags(appVersion string, revision uint64) ([]string, error) {
 	}
 	if err := version.ValidateAliases(appVersion, aliases); err != nil {
 		return nil, err
+	}
+	if a.isPrerelease() {
+		if err := version.ValidatePrereleaseAliases(aliases); err != nil {
+			return nil, err
+		}
 	}
 	return append([]string{fmt.Sprintf("%s-r%d", appVersion, revision), appVersion}, aliases...), nil
 }

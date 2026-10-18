@@ -204,7 +204,7 @@ func (a app) reserve() error {
 		TargetCommitish: a.getenv("GITHUB_SHA"),
 		Name:            tags[0],
 		Draft:           true,
-		Prerelease:      strings.Contains(version, "-"),
+		Prerelease:      a.isPrerelease(),
 		Body:            notes,
 	})
 	if err != nil {
@@ -220,7 +220,7 @@ func (a app) reserve() error {
 	if err := a.output("tags", strings.Join(tags, "\n")); err != nil {
 		return err
 	}
-	if err := a.output("latest", strconv.FormatBool(!strings.Contains(version, "-") && contains(tags[1:], "latest"))); err != nil {
+	if err := a.output("latest", strconv.FormatBool(!a.isPrerelease() && contains(tags[1:], "latest"))); err != nil {
 		return err
 	}
 	return appendFile(a.getenv("GITHUB_STEP_SUMMARY"), "# "+tags[0]+"\n\n"+notes)

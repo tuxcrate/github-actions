@@ -27,6 +27,55 @@ func testApp(t *testing.T) (app, map[string]string) {
 	return app{exec: execCommand, getenv: func(key string) string { return env[key] }}, env
 }
 
+func TestNumericPrereleaseReservation(t *testing.T) {
+	a, env := testApp(t)
+	env["APP_VERSION"] = "5.0.0.2668"
+	env["PRERELEASE"] = "true"
+	env["TRACK"] = "develop"
+	env["ALIASES"] = `["develop","preview"]`
+	posted := false
+	a.exec = func(input string, args ...string) (commandResult, error) {
+		switch {
+		case args[0] == "gh" && args[1] == "api" && strings.HasPrefix(args[2], "repos/"):
+			return commandResult{stdout: env["GITHUB_SHA"]}, nil
+		case args[0] == "gh" && args[2] == "--paginate":
+			return commandResult{stdout: `[[{"tag_name":"v5.0.0.2668-r2","draft":true}]]`}, nil
+		case args[0] == "git" && args[1] == "tag":
+			return commandResult{}, nil
+		case args[0] == "docker":
+			if args[len(args)-1] != "ghcr.io/tuxcrate/zrepl:5.0.0.2668-r3" {
+				t.Fatal(args)
+			}
+			return commandResult{code: 1, stderr: "not found"}, nil
+		case args[0] == "git" && args[1] == "log":
+			return commandResult{}, nil
+		case args[0] == "gh" && args[2] == "--method":
+			var payload releaseRequest
+			if err := json.Unmarshal([]byte(input), &payload); err != nil {
+				t.Fatal(err)
+			}
+			if !payload.Prerelease || payload.TagName != "v5.0.0.2668-r3" || !strings.Contains(payload.Body, "<!-- tuxcrate-track:develop -->") {
+				t.Fatal(payload)
+			}
+			posted = true
+			return commandResult{}, nil
+		default:
+			t.Fatalf("unexpected command %v", args)
+			return commandResult{}, nil
+		}
+	}
+	if err := a.reserve(); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(env["GITHUB_OUTPUT"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !posted || !strings.Contains(string(data), "latest<<TUXCRATE_OUTPUT\nfalse\n") || !strings.Contains(string(data), "5.0.0.2668-r3\n5.0.0.2668\ndevelop\npreview\n") {
+		t.Fatal(string(data))
+	}
+}
+
 func TestMetadata(t *testing.T) {
 	a, env := testApp(t)
 	env["IMAGE"] = ""

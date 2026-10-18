@@ -7,12 +7,12 @@ import (
 )
 
 func TestValidateVersion(t *testing.T) {
-	for _, version := range []string{"0.7.0", "1.0.0", "13.20.102", "0.7.0-rc1", "1.2.3-rc.1", "1.2.3-0"} {
+	for _, version := range []string{"0.7.0", "1.0.0", "13.20.102", "0.7.0-rc1", "1.2.3-rc.1", "1.2.3-0", "4.0.20.3014", "5.0.0.2668", "1.2.3.0", "1.2.3.4-rc.1"} {
 		if err := Validate(version); err != nil {
 			t.Error(err)
 		}
 	}
-	for _, version := range []string{"v0.7.0", "0.7", "01.7.0", "0.7.0-rc.01", "1.2.3+build", "1.2.3-r0", "1.2.3-rc.1-r3", "1.2.3-", "1.2.3-a..b", "0.7.0\n", "$(id)", "1.2.3-" + strings.Repeat("a", 101)} {
+	for _, version := range []string{"v0.7.0", "0.7", "01.7.0", "0.7.0-rc.01", "1.2.3+build", "1.2.3-r0", "1.2.3-rc.1-r3", "1.2.3-", "1.2.3-a..b", "0.7.0\n", "$(id)", "1.2.3-" + strings.Repeat("a", 101), "1.2.3.04", "1.2.3.4.5", "1.2.3.4-r0", "1.2.3.4-rc.01", "1.2.3.4+build"} {
 		if Validate(version) == nil {
 			t.Errorf("accepted invalid version %q", version)
 		}
@@ -28,6 +28,7 @@ func TestNextRevision(t *testing.T) {
 		{"first", "0.7.0", nil, 0},
 		{"highest", "0.7.0", []string{"v0.7.0-r0", "v0.7.0-r12"}, 13},
 		{"reset", "0.7.1", []string{"v0.7.0-r12"}, 0},
+		{"four-part", "4.0.20.3014", []string{"v4.0.20.3014-r0", "v4.0.20.3014-r12", "v4.0.20.3013-r20"}, 13},
 		{"unrelated", "0.7.0", []string{"v0.7.0-r01", "v0.7.0-r1-extra", "v0.7.0"}, 0},
 		{"prerelease", "0.8.0-rc.1", []string{"v0.8.0-rc.1-r2", "v0.8.0-rc.2-r8", "v0.8.0-r9"}, 3},
 	} {
@@ -63,6 +64,8 @@ func TestParseReleaseTag(t *testing.T) {
 		wantError    bool
 	}{
 		{"v1.2.3-r0", "1.2.3", 0, true, false},
+		{"v4.0.20.3014-r7", "4.0.20.3014", 7, true, false},
+		{"v5.0.0.2668-rc.1-r3", "5.0.0.2668-rc.1", 3, true, false},
 		{"v2.0.0-rc.1-r12", "2.0.0-rc.1", 12, true, false},
 		{"v1.2.3-r18446744073709551615", "1.2.3", ^uint64(0), true, false},
 		{"v1.2.3-r18446744073709551616", "1.2.3", ^uint64(0), true, true},

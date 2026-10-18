@@ -39,3 +39,48 @@ func TestPlanRejectsInvalidRepository(t *testing.T) {
 		t.Fatal("accepted an invalid repository")
 	}
 }
+
+func TestFourPartPrereleaseTracks(t *testing.T) {
+	config := `tracks:
+  - name: stable
+    upstream:
+      datasource: github-releases
+      depName: Sonarr/Sonarr
+      version: "4.0.20.3014"
+    aliases: ["{major}", "{major}.{minor}", latest]
+  - name: develop
+    upstream:
+      datasource: github-releases
+      depName: Sonarr/Sonarr
+      version: "5.0.0.2668"
+    prerelease: true
+    aliases: [develop, preview]
+    buildArgs:
+      SONARR_BRANCH: develop
+`
+	builds, err := Plan(strings.NewReader(config), "tuxcrate/sonarr")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(builds) != 2 || builds[0].Prerelease || !builds[1].Prerelease || builds[0].Aliases != `["4","4.0","latest"]` || builds[1].Aliases != `["develop","preview"]` || builds[1].BuildArgs != "APP_VERSION=5.0.0.2668\nSONARR_BRANCH=develop" {
+		t.Fatal(builds)
+	}
+	for _, alias := range []string{"latest", "stable", "5", "5.0", "5.0.0", "5.0.0.2668"} {
+		bad := strings.Replace(config, "[develop, preview]", "["+alias+"]", 1)
+		if _, err := Plan(strings.NewReader(bad), "tuxcrate/sonarr"); err == nil {
+			t.Errorf("accepted prerelease alias %q", alias)
+		}
+	}
+}
+
+func TestPrereleaseSuffixCannotBeDisabled(t *testing.T) {
+	builds, err := Plan(strings.NewReader(`tracks:
+  - name: preview
+    version: "1.2.3-rc.1"
+    prerelease: false
+    aliases: [preview]
+`), "tuxcrate/test")
+	if err != nil || !builds[0].Prerelease {
+		t.Fatalf("%v: %v", builds, err)
+	}
+}
