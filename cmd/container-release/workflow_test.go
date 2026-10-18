@@ -36,7 +36,7 @@ func TestWorkflowRequiresRootMetadata(t *testing.T) {
 		t.Fatal(err)
 	}
 	for input := range workflow.On.Call.Inputs {
-		if input != "shared-ref" && input != "website-repository" {
+		if input != "shared-ref" && input != "docs-repository" {
 			t.Fatalf("workflow accepts image configuration input %s", input)
 		}
 	}
