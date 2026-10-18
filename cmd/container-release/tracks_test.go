@@ -374,6 +374,12 @@ func TestManifest(t *testing.T) {
 	a, env := testApp(t)
 	env["RELEASE_TAG"] = "v0.7.0-r3"
 	env["ALIASES"] = `["stable","latest"]`
+	env["PLATFORMS"] = " linux/amd64 , linux/arm64 "
+	var calls []string
+	a.exec = imageOSRunner(t, env["IMAGE"]+"@"+env["IMAGE_DIGEST"], "linux/amd64", map[string]string{
+		"/etc/os-release":     "ID=debian\nVERSION_ID=\"13\"\n",
+		"/etc/debian_version": "13.7\n",
+	}, "", &calls)
 	// manifest writes in the source checkout, as the workflow does.
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -397,9 +403,108 @@ func TestManifest(t *testing.T) {
 	if m["schemaVersion"] != float64(1) || m["revision"] != float64(3) || m["immutableTag"] != "0.7.0-r3" || m["track"] != "stable" || m["digest"] != env["IMAGE_DIGEST"] {
 		t.Fatal(m)
 	}
+	if m["os_flavor"] != "debian" || m["os_version"] != "13.7" {
+		t.Fatal(m)
+	}
+	if !reflect.DeepEqual(m["platforms"], []any{"linux/amd64", "linux/arm64"}) {
+		t.Fatal(m)
+	}
+	if !reflect.DeepEqual(calls, []string{"create", "cp", "cp", "rm"}) {
+		t.Fatal(calls)
+	}
+	env["PLATFORMS"] = ""
+	if a.manifest() == nil {
+		t.Fatal("accepted missing image platform")
+	}
+	env["PLATFORMS"] = "linux/amd64,linux/arm64"
 	env["RELEASE_TAG"] = "v0.8.0-r3"
 	if a.manifest() == nil {
 		t.Fatal("accepted mismatched tag")
+	}
+}
+
+func TestCheckManifest(t *testing.T) {
+	for _, tt := range []struct {
+		name, key, value, osRelease string
+		valid                       bool
+	}{
+		{name: "complete manifest", valid: true},
+		{name: "platform whitespace", key: "PLATFORMS", value: " linux/amd64 , linux/arm64 ", valid: true},
+		{name: "empty OS flavor", osRelease: "ID=\nVERSION_ID=3.24.2"},
+		{name: "empty OS version", osRelease: "ID=alpine\nVERSION_ID="},
+		{name: "missing version", key: "APP_VERSION"},
+		{name: "missing digest", key: "IMAGE_DIGEST"},
+		{name: "invalid image", key: "IMAGE", value: "invalid"},
+		{name: "invalid track", key: "TRACK", value: "invalid track"},
+		{name: "invalid aliases", key: "ALIASES", value: `[""]`},
+		{name: "missing platforms", key: "PLATFORMS"},
+		{name: "empty second platform", key: "PLATFORMS", value: "linux/amd64,"},
+		{name: "whitespace-only platform", key: "PLATFORMS", value: "linux/amd64, "},
+		{name: "invalid platform", key: "PLATFORMS", value: "amd64"},
+		{name: "missing source commit", key: "GITHUB_SHA"},
+		{name: "invalid source commit", key: "GITHUB_SHA", value: "not-a-commit"},
+		{name: "missing local image", key: "LOCAL_IMAGE"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			a, env := testApp(t)
+			env["LOCAL_IMAGE"] = "tuxcrate-pr-os-check:stable"
+			env["TRACK"] = "stable"
+			env["ALIASES"] = `["stable","latest"]`
+			// PR checks synthesize their own tag instead of reserving a revision.
+			env["RELEASE_TAG"] = "not-a-real-release"
+			if tt.key != "" {
+				env[tt.key] = tt.value
+			}
+			data := "ID=alpine\nVERSION_ID=3.24.2"
+			if tt.osRelease != "" {
+				data = tt.osRelease
+			}
+			var calls []string
+			a.exec = imageOSRunner(t, env["LOCAL_IMAGE"], "linux/amd64", map[string]string{"/etc/os-release": data}, "", &calls)
+			cwd, err := os.Getwd()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chdir(t.TempDir()); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { os.Chdir(cwd) })
+			err = a.checkManifest()
+			if !tt.valid {
+				if err == nil {
+					t.Fatal("accepted missing or invalid required metadata")
+				}
+				if _, statErr := os.Stat("release.json"); !os.IsNotExist(statErr) {
+					t.Fatal("created a manifest with invalid metadata")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			manifest, err := os.ReadFile("release.json")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var fields map[string]any
+			if err := json.Unmarshal(manifest, &fields); err != nil {
+				t.Fatal(err)
+			}
+			for _, key := range []string{"schemaVersion", "image", "track", "version", "revision", "immutableTag", "digest", "aliasesAtPublication", "platforms", "sourceCommit", "os_flavor", "os_version"} {
+				if value, ok := fields[key]; !ok || value == nil || value == "" {
+					t.Fatalf("missing or empty %s in %s", key, manifest)
+				}
+			}
+			if fields["revision"] != float64(0) || fields["immutableTag"] != "0.7.0-r0" || fields["image"] != env["IMAGE"] {
+				t.Fatal(fields)
+			}
+			if !reflect.DeepEqual(fields["platforms"], []any{"linux/amd64", "linux/arm64"}) {
+				t.Fatal(fields)
+			}
+			if _, err := os.Stat(env["GITHUB_OUTPUT"]); !os.IsNotExist(err) {
+				t.Fatal("validation must not emit publication outputs")
+			}
+		})
 	}
 }
 

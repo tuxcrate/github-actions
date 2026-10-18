@@ -109,11 +109,13 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           TRACK: ${{ matrix.track }}
           COMMIT_SHA: ${{ github.sha }}
+          PLATFORMS: ${{ matrix.platforms }}
         run: |
           image="ghcr.io/${IMAGE_REPOSITORY,,}-pr"
           tag="pr-${PR_NUMBER}-${TRACK}"
           {
             echo "image=$image"
+            echo "platform=${PLATFORMS%%,*}"
             echo 'tags<<PR_IMAGE_TAGS'
             echo "$image:$tag"
             echo "$image:$tag-$COMMIT_SHA"
@@ -150,6 +152,46 @@ jobs:
           no-cache: true
           cache-from: type=gha,scope=container-pr-${{ github.event.pull_request.number }}-${{ matrix.track }}
           cache-to: type=gha,mode=max,scope=container-pr-${{ github.event.pull_request.number }}-${{ matrix.track }}
+      - name: Load first platform for OS metadata validation
+        id: local-image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.containerfile }}
+          platforms: ${{ steps.preview.outputs.platform }}
+          build-args: |
+            ${{ matrix.build-args }}
+            BUILDKIT_DOCKERFILE_CHECK=skip=InvalidDefaultArgInFrom
+          load: true
+          tags: tuxcrate-pr-os-check:${{ matrix.track }}
+          provenance: false
+          sbom: false
+          # Reuse the just-built layers, including for fork PRs that cannot push.
+          cache-from: type=gha,scope=container-pr-${{ github.event.pull_request.number }}-${{ matrix.track }}
+      - name: Check out shared OS validation tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: tuxcrate/github-actions
+          ref: ${{ inputs.shared-ref }}
+          path: .tuxcrate-release-tooling
+          persist-credentials: false
+      - name: Generate and validate synthetic release metadata
+        env:
+          APP_VERSION: ${{ matrix.version }}
+          TRACK: ${{ matrix.track }}
+          ALIASES: ${{ matrix.aliases }}
+          IMAGE: ${{ matrix.image }}
+          # This is a local image ID, not a published multiarch digest. The
+          # generated manifest is only a validation fixture, never a release.
+          IMAGE_DIGEST: ${{ steps.local-image.outputs.imageid }}
+          PLATFORMS: ${{ matrix.platforms }}
+          LOCAL_IMAGE: tuxcrate-pr-os-check:${{ matrix.track }}
+        run: |
+          set -euo pipefail
+          go build -C .tuxcrate-release-tooling -o "$RUNNER_TEMP/container-release" ./cmd/container-release
+          mkdir -p "$RUNNER_TEMP/pr-release-metadata"
+          cd "$RUNNER_TEMP/pr-release-metadata"
+          "$RUNNER_TEMP/container-release" check-manifest
       - name: Comment PR image pull instructions
         if: env.PUBLISH_PR == 'true'
         env:
@@ -165,6 +207,7 @@ jobs:
           set -euo pipefail
           marker="<!-- tuxcrate-pr-image:$TRACK -->"
           tag="pr-${PR_NUMBER}-${TRACK}"
+          release_json="$(cat "$RUNNER_TEMP/pr-release-metadata/release.json")"
           body="$(cat <<EOF
           $marker
           ### Container preview: \`$TRACK\`
@@ -187,6 +230,17 @@ jobs:
           \`\`\`
 
           [Build details]($RUN_URL). Preview images are for testing, not production.
+
+          <details>
+          <summary>Synthetic release.json (validation only)</summary>
+
+          Generated to validate release metadata. Revision \`r0\` and the local image ID are placeholders, not a published release revision or multiarch digest.
+
+          \`\`\`json
+          $release_json
+          \`\`\`
+
+          </details>
           EOF
           )"
           comments="repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments"

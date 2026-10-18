@@ -367,8 +367,10 @@ func main() {
 		err = a.plan()
 	case flag.NArg() == 1 && flag.Arg(0) == "manifest":
 		err = a.manifest()
+	case flag.NArg() == 1 && flag.Arg(0) == "check-manifest":
+		err = a.checkManifest()
 	default:
-		err = errors.New("usage: container-release {plan|metadata|reserve|manifest}")
+		err = errors.New("usage: container-release {plan|metadata|reserve|manifest|check-manifest}")
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)

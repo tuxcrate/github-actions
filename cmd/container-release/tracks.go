@@ -122,6 +122,8 @@ var (
 	aliasRE          = regexp.MustCompile(`^[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}$`)
 	argRE            = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 	baseRepositoryRE = regexp.MustCompile(`^[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*(?::[0-9]+)?(?:/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)*$`)
+	platformRE       = regexp.MustCompile(`^[a-z0-9]+/[a-z0-9_]+(?:/[a-zA-Z0-9._-]+)?$`)
+	commitRE         = regexp.MustCompile(`^[0-9a-f]{40}$`)
 )
 
 func validateBaseImage(image string) error {
@@ -327,6 +329,27 @@ func (a app) plan() error {
 }
 
 func (a app) manifest() error {
+	return a.writeManifest("")
+}
+
+func (a app) checkManifest() error {
+	localImage := a.getenv("LOCAL_IMAGE")
+	if localImage == "" {
+		return errors.New("a local image is required to validate PR release metadata")
+	}
+	getenv := a.getenv
+	a.getenv = func(key string) string {
+		if key == "RELEASE_TAG" {
+			return "v" + getenv("APP_VERSION") + "-r0"
+		}
+		return getenv(key)
+	}
+	// PR validation uses a local image and a synthetic revision. It never
+	// reserves a revision, creates a GitHub release, or publishes release tags.
+	return a.writeManifest(localImage)
+}
+
+func (a app) writeManifest(localImage string) error {
 	version := a.getenv("APP_VERSION")
 	if err := validateVersion(version); err != nil {
 		return err
@@ -351,7 +374,30 @@ func (a app) manifest() error {
 	if !digestRE.MatchString(a.getenv("IMAGE_DIGEST")) {
 		return errors.New("invalid image digest")
 	}
+	platforms := strings.Split(a.getenv("PLATFORMS"), ",")
+	for i, platform := range platforms {
+		platform = strings.TrimSpace(platform)
+		if !platformRE.MatchString(platform) {
+			return fmt.Errorf("invalid or empty release platform %q", platform)
+		}
+		platforms[i] = platform
+	}
 	track := a.trackName()
+	if !trackRE.MatchString(track) {
+		return errors.New("invalid release track")
+	}
+	if !commitRE.MatchString(a.getenv("GITHUB_SHA")) {
+		return errors.New("invalid or empty source commit")
+	}
+	imageRef := image + "@" + a.getenv("IMAGE_DIGEST")
+	if localImage != "" {
+		imageRef = localImage
+	}
+	// A release has one OS identity; inspect the first declared platform.
+	flavor, osVersion, err := a.imageOS(imageRef, platforms[0])
+	if err != nil {
+		return err
+	}
 	data, err := json.MarshalIndent(struct {
 		SchemaVersion int      `json:"schemaVersion"`
 		Image         string   `json:"image"`
@@ -363,7 +409,9 @@ func (a app) manifest() error {
 		Aliases       []string `json:"aliasesAtPublication"`
 		Platforms     []string `json:"platforms"`
 		SourceCommit  string   `json:"sourceCommit"`
-	}{1, image, track, version, revision, tags[0], a.getenv("IMAGE_DIGEST"), tags[1:], strings.Split(a.getenv("PLATFORMS"), ","), a.getenv("GITHUB_SHA")}, "", "  ")
+		OSFlavor      string   `json:"os_flavor"`
+		OSVersion     string   `json:"os_version"`
+	}{1, image, track, version, revision, tags[0], a.getenv("IMAGE_DIGEST"), tags[1:], platforms, a.getenv("GITHUB_SHA"), flavor, osVersion}, "", "  ")
 	if err != nil {
 		return err
 	}

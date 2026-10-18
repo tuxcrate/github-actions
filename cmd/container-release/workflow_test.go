@@ -170,12 +170,12 @@ func TestWorkflowPRImages(t *testing.T) {
 	if pr.Env["PUBLISH_PR"] != gate {
 		t.Fatal("publishing must exclude fork PRs")
 	}
-	var prepared, loggedIn, built, commented bool
+	var prepared, loggedIn, built, loaded, tooling, validated, commented bool
 	for _, s := range pr.Steps {
 		switch {
 		case s.ID == "preview":
 			prepared = true
-			if s.Env["IMAGE_REPOSITORY"] != "${{ github.repository }}" || s.Env["PR_NUMBER"] != "${{ github.event.pull_request.number }}" || s.Env["TRACK"] != "${{ matrix.track }}" || s.Env["COMMIT_SHA"] != "${{ github.sha }}" {
+			if s.Env["IMAGE_REPOSITORY"] != "${{ github.repository }}" || s.Env["PR_NUMBER"] != "${{ github.event.pull_request.number }}" || s.Env["TRACK"] != "${{ matrix.track }}" || s.Env["COMMIT_SHA"] != "${{ github.sha }}" || s.Env["PLATFORMS"] != "${{ matrix.platforms }}" {
 				t.Fatal("preview tags must use caller repository, PR number, track, and tested merge commit")
 			}
 			for _, track := range []string{"stable", "preview"} {
@@ -183,7 +183,7 @@ func TestWorkflowPRImages(t *testing.T) {
 					output := filepath.Join(t.TempDir(), "output")
 					sha := strings.Repeat("a", 40)
 					cmd := exec.Command("bash", "-e", "-o", "pipefail", "-c", s.Run)
-					cmd.Env = append(os.Environ(), "IMAGE_REPOSITORY=Tuxcrate/Zrepl", "PR_NUMBER=12", "TRACK="+track, "COMMIT_SHA="+sha, "GITHUB_OUTPUT="+output)
+					cmd.Env = append(os.Environ(), "IMAGE_REPOSITORY=Tuxcrate/Zrepl", "PR_NUMBER=12", "TRACK="+track, "COMMIT_SHA="+sha, "GITHUB_OUTPUT="+output, "PLATFORMS=linux/arm64,linux/amd64")
 					if out, err := cmd.CombinedOutput(); err != nil {
 						t.Fatalf("prepare tags: %v: %s", err, out)
 					}
@@ -193,7 +193,7 @@ func TestWorkflowPRImages(t *testing.T) {
 					}
 					image := "ghcr.io/tuxcrate/zrepl-pr"
 					tag := "pr-12-" + track
-					want := "image=" + image + "\ntags<<PR_IMAGE_TAGS\n" + image + ":" + tag + "\n" + image + ":" + tag + "-" + sha + "\nPR_IMAGE_TAGS\n"
+					want := "image=" + image + "\nplatform=linux/arm64\ntags<<PR_IMAGE_TAGS\n" + image + ":" + tag + "\n" + image + ":" + tag + "-" + sha + "\nPR_IMAGE_TAGS\n"
 					if string(got) != want {
 						t.Fatalf("unexpected preview tags: %s", got)
 					}
@@ -203,6 +203,37 @@ func TestWorkflowPRImages(t *testing.T) {
 			loggedIn = true
 			if !prepared || s.If != "env.PUBLISH_PR == 'true'" || s.With["password"] != "${{ secrets.GITHUB_TOKEN }}" {
 				t.Fatal("registry login must be gated and use only GITHUB_TOKEN")
+			}
+		case s.Name == "Load first platform for OS metadata validation":
+			loaded = true
+			if !built || s.If != "" || !strings.HasPrefix(s.Uses, "docker/build-push-action@") || s.With["load"] != "true" || s.With["platforms"] != "${{ steps.preview.outputs.platform }}" || s.With["tags"] != "tuxcrate-pr-os-check:${{ matrix.track }}" {
+				t.Fatal("all PRs, including forks, must load the first platform for validation")
+			}
+			if s.With["context"] != "${{ matrix.context }}" || s.With["file"] != "${{ matrix.containerfile }}" || !strings.Contains(s.With["build-args"], "${{ matrix.build-args }}") || s.With["push"] != "" {
+				t.Fatal("validation must build the same source and arguments without pushing")
+			}
+		case s.Name == "Check out shared OS validation tooling":
+			tooling = true
+			if !loaded || s.If != "" || s.With["repository"] != "tuxcrate/github-actions" || s.With["ref"] != "${{ inputs.shared-ref }}" || s.With["persist-credentials"] != "false" {
+				t.Fatal("validation tooling must be checked out after the image build without credentials")
+			}
+		case s.Name == "Generate and validate synthetic release metadata":
+			validated = true
+			if !tooling || s.If != "" || !strings.Contains(s.Run, `"$RUNNER_TEMP/container-release" check-manifest`) || !strings.Contains(s.Run, `cd "$RUNNER_TEMP/pr-release-metadata"`) {
+				t.Fatal("all PRs must generate and validate a temporary release.json")
+			}
+			for key, want := range map[string]string{
+				"APP_VERSION":  "${{ matrix.version }}",
+				"TRACK":        "${{ matrix.track }}",
+				"ALIASES":      "${{ matrix.aliases }}",
+				"IMAGE":        "${{ matrix.image }}",
+				"IMAGE_DIGEST": "${{ steps.local-image.outputs.imageid }}",
+				"PLATFORMS":    "${{ matrix.platforms }}",
+				"LOCAL_IMAGE":  "tuxcrate-pr-os-check:${{ matrix.track }}",
+			} {
+				if s.Env[key] != want {
+					t.Fatalf("validation environment %s: got %q, want %q", key, s.Env[key], want)
+				}
 			}
 		case strings.HasPrefix(s.Uses, "docker/build-push-action@"):
 			built = true
@@ -214,7 +245,7 @@ func TestWorkflowPRImages(t *testing.T) {
 			}
 		case s.Name == "Comment PR image pull instructions":
 			commented = true
-			if !built || s.If != "env.PUBLISH_PR == 'true'" {
+			if !built || !validated || s.If != "env.PUBLISH_PR == 'true'" {
 				t.Fatal("comments must follow successful eligible PR image builds")
 			}
 			for key, want := range map[string]string{
@@ -234,8 +265,8 @@ func TestWorkflowPRImages(t *testing.T) {
 			testPRImageComment(t, s.Run)
 		}
 	}
-	if !prepared || !loggedIn || !built || !commented {
-		t.Fatal("missing PR tag preparation, conditional login, build, or comment")
+	if !prepared || !loggedIn || !built || !loaded || !tooling || !validated || !commented {
+		t.Fatal("missing PR tag preparation, conditional login, build, OS validation, or comment")
 	}
 	if !strings.Contains(workflow.Jobs["release"].If, "github.ref == format('refs/heads/{0}', github.event.repository.default_branch)") || strings.Contains(workflow.Jobs["release"].If, "pull_request") {
 		t.Fatal("PRs must not enter the production release job")
@@ -245,7 +276,7 @@ func TestWorkflowPRImages(t *testing.T) {
 func testPRImageComment(t *testing.T, script string) {
 	t.Helper()
 	for _, track := range []string{"stable", "preview"} {
-		for _, scenario := range []string{"create", "update", "update-later-page", "multiple-matches", "lookup-fails", "invalid-json"} {
+		for _, scenario := range []string{"create", "update", "update-later-page", "multiple-matches", "lookup-fails", "invalid-json", "missing-manifest"} {
 			t.Run("comment/"+track+"/"+scenario, func(t *testing.T) {
 				dir := t.TempDir()
 				// Simulate GitHub without making requests or requiring gh in Go tests.
@@ -292,16 +323,27 @@ fi
 				digest := "sha256:" + strings.Repeat("b", 64)
 				image := "ghcr.io/tuxcrate/zrepl-pr"
 				runURL := "https://github.com/tuxcrate/zrepl/actions/runs/123"
+				manifest := fmt.Sprintf("{\n  \"track\": %q,\n  \"os_flavor\": \"debian\",\n  \"os_version\": \"13.7\"\n}", track)
+				if scenario != "missing-manifest" {
+					metadataDir := filepath.Join(dir, "pr-release-metadata")
+					if err := os.Mkdir(metadataDir, 0755); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.WriteFile(filepath.Join(metadataDir, "release.json"), []byte(manifest+"\n"), 0600); err != nil {
+						t.Fatal(err)
+					}
+				}
 				cmd := exec.Command("bash", "-c", script)
 				cmd.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"),
+					"RUNNER_TEMP="+dir,
 					"GH_LOOKUP="+lookup, "GH_WRITE="+write, "COMMENT_PAGES="+pages, "FAIL_LOOKUP="+fail,
 					"GITHUB_REPOSITORY=tuxcrate/zrepl", "PR_NUMBER=12", "TRACK="+track,
 					"IMAGE="+image, "IMAGE_DIGEST="+digest, "COMMIT_SHA="+sha,
 					"PLATFORMS=linux/amd64,linux/arm64", "RUN_URL="+runURL)
 				out, err := cmd.CombinedOutput()
-				if scenario == "lookup-fails" || scenario == "invalid-json" {
+				if scenario == "lookup-fails" || scenario == "invalid-json" || scenario == "missing-manifest" {
 					if err == nil {
-						t.Fatal("ignored failed comment lookup")
+						t.Fatal("ignored failed comment lookup or missing release manifest")
 					}
 					if _, err := os.Stat(write); !os.IsNotExist(err) {
 						t.Fatal("must not post a duplicate comment when lookup fails")
@@ -331,6 +373,10 @@ fi
 					if !strings.Contains(string(request), want) {
 						t.Fatalf("comment request missing %q: %s", want, request)
 					}
+				}
+				spoiler := "<details>\n<summary>Synthetic release.json (validation only)</summary>"
+				if !strings.Contains(string(request), spoiler) || !strings.Contains(string(request), "```json\n"+manifest+"\n```\n\n</details>") || !strings.Contains(string(request), "Revision `r0` and the local image ID are placeholders") {
+					t.Fatalf("comment must include the generated manifest in a collapsed, clearly labeled section: %s", request)
 				}
 			})
 		}
