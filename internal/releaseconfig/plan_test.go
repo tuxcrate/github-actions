@@ -1,6 +1,8 @@
 package releaseconfig
 
 import (
+	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -82,5 +84,146 @@ func TestPrereleaseSuffixCannotBeDisabled(t *testing.T) {
 `), "tuxcrate/test")
 	if err != nil || !builds[0].Prerelease {
 		t.Fatalf("%v: %v", builds, err)
+	}
+}
+
+func TestPlanSkipsSupersededExplicitPrereleases(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		tracks  string
+		want    []string
+		wantErr string
+	}{
+		{
+			name: "radarr upstream versions",
+			tracks: `
+  - name: stable
+    upstream: {datasource: github-releases, depName: Radarr/Radarr, version: "6.4.4.10685"}
+    tags: ["${version}", latest]
+  - name: prerelease
+    upstream: {datasource: github-releases, depName: Radarr/Radarr, version: "6.4.4.10684"}
+    prerelease: true
+    tags: ["${version}-prerelease", "${major}-prerelease", "${major}.${minor}-prerelease"]`,
+			want: []string{"stable"},
+		},
+		{
+			name: "all stable tracks regardless of name or order",
+			tracks: `
+  - {name: preview, version: "2.0.0", prerelease: true, tags: ["${version}-prerelease", preview]}
+  - {name: older, version: "1.0.0", tags: ["${version}"]}
+  - {name: current, version: "3.0.0", tags: ["${version}"]}
+  - {name: develop, version: "4.0.0", prerelease: true, tags: ["${version}-prerelease", develop]}`,
+			want: []string{"older", "current", "develop"},
+		},
+		{
+			name: "prerelease alone",
+			tracks: `
+  - {name: preview, version: "1.0.0", prerelease: true, tags: ["${version}-prerelease", preview]}`,
+			want: []string{"preview"},
+		},
+		{
+			name: "other prereleases do not suppress builds",
+			tracks: `
+  - {name: preview, version: "1.0.0", prerelease: true, tags: ["${version}-prerelease", preview]}
+  - {name: develop, version: "3.0.0", prerelease: true, tags: ["${version}-prerelease", develop]}
+  - {name: rc, version: "4.0.0-rc.1", tags: ["${version}", rc]}`,
+			want: []string{"preview", "develop", "rc"},
+		},
+		{
+			name: "suffix without explicit flag is not filtered",
+			tracks: `
+  - {name: preview, version: "1.0.0-rc.1", tags: ["${version}", preview]}
+  - {name: stable, version: "2.0.0", tags: ["${version}", latest]}`,
+			want: []string{"preview", "stable"},
+		},
+		{
+			name: "explicit suffixed prerelease is filtered",
+			tracks: `
+  - {name: preview, version: "1.0.0-rc.1", prerelease: true, tags: ["${version}", preview]}
+  - {name: stable, version: "1.0.0", tags: ["${version}", latest]}`,
+			want: []string{"stable"},
+		},
+		{
+			name: "debian revision is not an application prerelease",
+			tracks: `
+  - {name: preview, version: "1.0.0", prerelease: true, tags: ["${version}-prerelease", preview]}
+  - name: stable
+    upstream:
+      datasource: deb
+      depName: example
+      registryUrl: "https://example.com/apt?suite=stable&components=main&binaryArch=amd64"
+      version: "2.0.0-1"
+    tags: ["${version}", latest]`,
+			want: []string{"stable"},
+		},
+		{
+			name: "equal numeric versions with distinct image tags are retained",
+			tracks: `
+  - {name: preview, version: "1.0.0", prerelease: true, tags: ["${version}-prerelease", preview]}
+  - {name: stable, version: "1.0.0", tags: ["${version}", latest]}`,
+			want: []string{"preview", "stable"},
+		},
+		{
+			name: "skipped tracks are still validated",
+			tracks: `
+  - {name: preview, version: "1.0.0", prerelease: true, tags: ["${version}-prerelease", latest]}
+  - {name: stable, version: "2.0.0", tags: ["${version}"]}`,
+			wantErr: `prerelease cannot own stable tag "latest"`,
+		},
+		{
+			name: "skipped tracks retain ownership validation",
+			tracks: `
+  - {name: preview, version: "1.0.0", prerelease: true, tags: ["${version}-prerelease", shared]}
+  - {name: stable, version: "2.0.0", tags: ["${version}", shared]}`,
+			wantErr: `tag "shared" is owned by both preview and stable`,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			builds, err := Plan(strings.NewReader("tracks:"+tt.tracks), "tuxcrate/test")
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("got error %v; want error containing %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got []string
+			for _, b := range builds {
+				got = append(got, b.Track)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("got tracks %v; want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestNewerStableVersion(t *testing.T) {
+	for _, tt := range []struct {
+		stable, candidate string
+		want              bool
+	}{
+		{"6.4.4.10685", "6.4.4.10684", true},
+		{"6.4.4.10684", "6.4.4.10685", false},
+		{"1.10.0", "1.9.0", true},
+		{"1.9.0", "1.10.0", false},
+		{"2.0.0", "1.99.99.9999", true},
+		{"1.2.4", "1.2.3.9999", true},
+		{"1.2.3", "1.2.3", false},
+		{"1.2.3.0", "1.2.3", false},
+		{"1.2.3", "1.2.3.0", false},
+		{"1.2.3.1", "1.2.3", true},
+		{"1.2.3", "1.2.3-rc.1", true},
+		{"1.2.3", "1.2.4-rc.1", false},
+		{"1.2.3", "1.2.3.1-rc.1", false},
+		{"1.2.300000000000000000000", "1.2.299999999999999999999", true},
+	} {
+		t.Run(fmt.Sprintf("%s>%s", tt.stable, tt.candidate), func(t *testing.T) {
+			if got := newerStableVersion(tt.stable, tt.candidate); got != tt.want {
+				t.Fatalf("got %v; want %v", got, tt.want)
+			}
+		})
 	}
 }
