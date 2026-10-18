@@ -7,13 +7,13 @@ on:
         description: Must match the ref used to call this workflow
         default: main
         type: string
-      website-repository:
-        description: Optional owner/repo to notify after publication (requires website-token)
+      docs-repository:
+        description: Optional owner/repo to notify after publication (requires docs-token)
         default: ''
         type: string
     secrets:
-      website-token:
-        description: Optional GitHub App or fine-grained token with contents write access to the website repository
+      docs-token:
+        description: Optional GitHub App or fine-grained token with contents write access to the docs repository
         required: false
 
 permissions:
@@ -372,25 +372,25 @@ jobs:
           MAKE_LATEST: ${{ steps.release.outputs.latest }}
         run: gh release edit "$RELEASE_TAG" --draft=false --latest="$MAKE_LATEST"
 
-  notify-website:
+  notify-docs:
     needs: release
-    if: needs.release.result == 'success' && inputs.website-repository != ''
+    if: needs.release.result == 'success' && inputs.docs-repository != ''
     runs-on: ubuntu-26.04
     timeout-minutes: 5
     permissions: {}
     steps:
-      - name: Request website refresh
-        # Publication is already complete; scheduled website builds recover a
+      - name: Request docs refresh
+        # Publication is already complete; scheduled docs builds recover a
         # missed notification without allocating another image revision.
         continue-on-error: true
         env:
-          GH_TOKEN: ${{ secrets.website-token }}
-          WEBSITE_REPOSITORY: ${{ inputs.website-repository }}
+          GH_TOKEN: ${{ secrets.docs-token }}
+          DOCS_REPOSITORY: ${{ inputs.docs-repository }}
         run: |
           set -euo pipefail
           if [[ -z "$GH_TOKEN" ]]; then
-            echo '::warning::Website refresh skipped: configure the WEBSITE_TOKEN secret in the caller repository.'
+            echo '::warning::Docs refresh skipped: configure the DOCS_TOKEN secret in the caller repository.'
             exit 0
           fi
-          [[ "$WEBSITE_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]
-          gh api --method POST "repos/$WEBSITE_REPOSITORY/dispatches" -f event_type=image-published
+          [[ "$DOCS_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]
+          gh api --method POST "repos/$DOCS_REPOSITORY/dispatches" -f event_type=image-published
