@@ -123,5 +123,47 @@ func Plan(r io.Reader, repository string) ([]Build, error) {
 		}
 		builds = append(builds, b)
 	}
-	return builds, nil
+	// Validate every track before filtering so dormant tracks cannot hide invalid
+	// configuration or conflicting tag ownership.
+	active := make([]Build, 0, len(builds))
+	for i, b := range builds {
+		superseded := false
+		if config.Tracks[i].Prerelease {
+			for _, other := range builds {
+				if !other.Prerelease && newerStableVersion(other.Version, b.Version) {
+					superseded = true
+					break
+				}
+			}
+		}
+		if !superseded {
+			active = append(active, b)
+		}
+	}
+	return active, nil
+}
+
+// newerStableVersion compares validated application versions where stable has
+// no prerelease suffix. A missing fourth component is treated as zero.
+func newerStableVersion(stable, candidate string) bool {
+	core, _, prerelease := strings.Cut(candidate, "-")
+	a, b := strings.Split(stable, "."), strings.Split(core, ".")
+	for i := 0; i < 4; i++ {
+		x, y := "0", "0"
+		if i < len(a) {
+			x = a[i]
+		}
+		if i < len(b) {
+			y = b[i]
+		}
+		// Validated numeric components have no leading zeros. Compare lengths
+		// first to avoid integer overflow for arbitrarily large components.
+		if len(x) != len(y) {
+			return len(x) > len(y)
+		}
+		if x != y {
+			return x > y
+		}
+	}
+	return prerelease // A stable version is newer than its suffixed prerelease.
 }
