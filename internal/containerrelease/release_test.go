@@ -27,6 +27,22 @@ func testApp(t *testing.T) (app, map[string]string) {
 	return app{exec: execCommand, getenv: func(key string) string { return env[key] }}, env
 }
 
+func stubReleaseOS(t *testing.T, a *app, env map[string]string) {
+	t.Helper()
+	var calls []string
+	runner := imageOSRunner(t, env["IMAGE"]+"@"+env["IMAGE_DIGEST"], strings.TrimSpace(strings.Split(env["PLATFORMS"], ",")[0]), map[string]string{
+		"/etc/os-release":     "ID=debian\nVERSION_ID=13\n",
+		"/etc/debian_version": "13.7\n",
+	}, "", &calls)
+	exec := a.exec
+	a.exec = func(input string, args ...string) (commandResult, error) {
+		if args[0] == "docker" && args[1] != "buildx" {
+			return runner(input, args...)
+		}
+		return exec(input, args...)
+	}
+}
+
 func TestNumericPrereleaseReservation(t *testing.T) {
 	a, env := testApp(t)
 	env["APP_VERSION"] = "5.0.0.2668"
@@ -64,6 +80,7 @@ func TestNumericPrereleaseReservation(t *testing.T) {
 			return commandResult{}, nil
 		}
 	}
+	stubReleaseOS(t, &a, env)
 	if err := a.reserve(); err != nil {
 		t.Fatal(err)
 	}
@@ -202,6 +219,9 @@ func TestReservation(t *testing.T) {
 					if !strings.Contains(payload["body"].(string), "Scheduled security rebuild") {
 						t.Fatal(payload)
 					}
+					if !strings.Contains(payload["body"].(string), "- OS: `Debian/13.7`\n") {
+						t.Fatal(payload)
+					}
 					if _, err := os.Stat(env["GITHUB_OUTPUT"]); !os.IsNotExist(err) {
 						t.Fatal("outputs written before reservation")
 					}
@@ -219,6 +239,7 @@ func TestReservation(t *testing.T) {
 				}
 				return commandResult{stdout: stdout}, nil
 			}
+			stubReleaseOS(t, &a, env)
 			err := a.reserve()
 			if (err != nil) != fail || calls != 6 {
 				t.Fatalf("calls %d: %v", calls, err)
@@ -236,6 +257,9 @@ func TestReservation(t *testing.T) {
 			data, err = os.ReadFile(env["GITHUB_STEP_SUMMARY"])
 			if err != nil || !strings.HasPrefix(string(data), "# 0.7.0-r9\n") {
 				t.Fatalf("%s: %v", data, err)
+			}
+			if !strings.Contains(string(data), "- OS: `Debian/13.7`\n") {
+				t.Fatalf("missing OS metadata in summary: %s", data)
 			}
 		})
 	}
@@ -257,6 +281,7 @@ func TestReleaseNotesFormatting(t *testing.T) {
 		return commandResult{}, nil
 	}
 	tags := []string{"0.7.0-r1", "latest", "0.7.0", "0", "stable", "0.7"}
+	stubReleaseOS(t, &a, env)
 	originalTags := append([]string(nil), tags...)
 	notes, err := a.releaseNotes("0.7.0", tags, env["IMAGE"], env["IMAGE_DIGEST"], "")
 	if err != nil {
@@ -266,6 +291,7 @@ func TestReleaseNotesFormatting(t *testing.T) {
 		t.Fatalf("release notes changed image tags: %v", tags)
 	}
 	for _, want := range []string{
+		"- Application version: `0.7.0`\n- OS: `Debian/13.7`\n",
 		"- Immutable Image: `ghcr.io/tuxcrate/zrepl:0.7.0-r1@" + env["IMAGE_DIGEST"] + "`\n",
 		"- Moving aliases:\n  - `ghcr.io/tuxcrate/zrepl:0.7.0`\n  - `ghcr.io/tuxcrate/zrepl:0.7`\n  - `ghcr.io/tuxcrate/zrepl:0`\n  - `ghcr.io/tuxcrate/zrepl:latest`\n  - `ghcr.io/tuxcrate/zrepl:stable`\n",
 		"- Platforms: `linux/amd64`, `linux/arm64`\n",
@@ -289,6 +315,22 @@ func TestReleaseNotesFormatting(t *testing.T) {
 	}
 }
 
+func TestReleaseNotesOSFailure(t *testing.T) {
+	a, env := testApp(t)
+	var calls []string
+	runner := imageOSRunner(t, env["IMAGE"]+"@"+env["IMAGE_DIGEST"], "linux/amd64", nil, "cp", &calls)
+	a.exec = func(input string, args ...string) (commandResult, error) {
+		if args[0] == "git" {
+			return commandResult{}, nil
+		}
+		return runner(input, args...)
+	}
+	notes, err := a.releaseNotes("0.7.0", []string{"0.7.0-r1", "latest"}, env["IMAGE"], env["IMAGE_DIGEST"], "")
+	if err == nil || notes != "" {
+		t.Fatalf("expected OS metadata failure, got %q, %v", notes, err)
+	}
+}
+
 func TestChangelogIntegration(t *testing.T) {
 	dir := t.TempDir()
 	for key, value := range map[string]string{"GIT_AUTHOR_NAME": "Test", "GIT_AUTHOR_EMAIL": "test@example.com", "GIT_COMMITTER_NAME": "Test", "GIT_COMMITTER_EMAIL": "test@example.com"} {
@@ -306,6 +348,7 @@ func TestChangelogIntegration(t *testing.T) {
 		}
 		return commandResult{stdout: strings.TrimSpace(string(data))}, nil
 	}
+	stubReleaseOS(t, &a, env)
 	run := func(args ...string) string {
 		t.Helper()
 		out, err := a.run("", args...)

@@ -179,6 +179,7 @@ func TestPrereleaseReservation(t *testing.T) {
 			return commandResult{}, nil
 		}
 	}
+	stubReleaseOS(t, &a, env)
 	if err := a.reserve(); err != nil {
 		t.Fatal(err)
 	}
