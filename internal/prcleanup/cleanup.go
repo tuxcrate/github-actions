@@ -2,6 +2,7 @@
 package prcleanup
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -20,9 +21,10 @@ var manifestDigest = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 var pullNumber = regexp.MustCompile(`^[1-9][0-9]*$`)
 
 type version struct {
-	ID       int64  `json:"id"`
-	Name     string `json:"name"`
-	Metadata struct {
+	ID        int64     `json:"id"`
+	Name      string    `json:"name"`
+	CreatedAt time.Time `json:"created_at"`
+	Metadata  struct {
 		Container struct {
 			Tags []string `json:"tags"`
 		} `json:"container"`
@@ -70,6 +72,10 @@ func (c *client) request(method, endpoint, token string, result any) (int, error
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		var response struct{ Message string }
+		if err := json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&response); err == nil && response.Message != "" {
+			return resp.StatusCode, fmt.Errorf("%s %s: HTTP %d: %q", method, endpoint, resp.StatusCode, response.Message)
+		}
 		return resp.StatusCode, fmt.Errorf("%s %s: HTTP %d", method, endpoint, resp.StatusCode)
 	}
 	if result != nil {
@@ -95,6 +101,14 @@ func (c *client) run(dryRun bool) error {
 	if err != nil {
 		return err
 	}
+	// The API's page order is not a retention policy. Process roots oldest first
+	// by their creation timestamp, with a stable ID tie-breaker.
+	slices.SortFunc(versions, func(a, b version) int {
+		if age := a.CreatedAt.Compare(b.CreatedAt); age != 0 {
+			return age
+		}
+		return cmp.Compare(a.ID, b.ID)
+	})
 	c.known = map[string]bool{}
 	for _, v := range versions {
 		if !manifestDigest.MatchString(v.Name) {
@@ -191,6 +205,27 @@ func (c *client) run(dryRun bool) error {
 			visit(v.Name, keep)
 		}
 	}
+	// GHCR refuses to delete the last tagged version individually. Protect the
+	// newest eligible tagged root AND all its descendants before deleting any
+	// children, rather than leaving a broken final index after an HTTP 400.
+	var newestTagged *version
+	taggedRetained := false
+	for i := range versions {
+		v := &versions[i]
+		if len(v.Metadata.Container.Tags) == 0 {
+			continue
+		}
+		if !remove[v.Name] || keep[v.Name] {
+			taggedRetained = true
+		} else {
+			newestTagged = v
+		}
+	}
+	if !taggedRetained && newestTagged != nil {
+		visit(newestTagged.Name, keep)
+		fmt.Fprintf(c.output, "Retain newest tagged preview ghcr.io/%s@%s (version %d, tags %v) and its manifests: GHCR requires a tagged version to remain.\n",
+			c.imagePath, newestTagged.Name, newestTagged.ID, newestTagged.Metadata.Container.Tags)
+	}
 	byDigest := map[string]version{}
 	for _, v := range versions {
 		byDigest[v.Name] = v
@@ -249,8 +284,11 @@ func (c *client) run(dryRun bool) error {
 		fmt.Fprintf(c.output, "Delete ghcr.io/%s@%s (version %d, tags %v, dry-run=%t)\n", c.imagePath, digest, v.ID, v.Metadata.Container.Tags, dryRun)
 		if !dryRun {
 			// Delete children before parents so failed sweeps remain discoverable.
-			if _, err := c.request("DELETE", c.packagePath+"/versions/"+strconv.FormatInt(v.ID, 10), c.token, nil); err != nil {
-				return fmt.Errorf("delete preview version (the repository needs package admin access): %w", err)
+			if status, err := c.request("DELETE", c.packagePath+"/versions/"+strconv.FormatInt(v.ID, 10), c.token, nil); err != nil {
+				if status == http.StatusUnauthorized || status == http.StatusForbidden {
+					return fmt.Errorf("delete preview version (check token permissions and package admin access): %w", err)
+				}
+				return fmt.Errorf("delete preview version: %w", err)
 			}
 		}
 	}
