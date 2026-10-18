@@ -20,4 +20,9 @@ func TestNumericPrereleaseAliases(t *testing.T) {
 	if err != nil || strings.Join(tags, ",") != "5.0.0.2668-r0,5.0.0.2668,preview" || a.trackName() != "preview" {
 		t.Fatalf("%v: %v", tags, err)
 	}
+	env["ALIASES"] = `["5-prerelease","5.0-prerelease"]`
+	tags, err = a.tags(env["APP_VERSION"], 0)
+	if err != nil || strings.Join(tags, ",") != "5.0.0.2668-r0,5.0.0.2668,5-prerelease,5.0-prerelease" {
+		t.Fatalf("%v: %v", tags, err)
+	}
 }

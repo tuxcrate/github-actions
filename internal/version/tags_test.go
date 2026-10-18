@@ -24,6 +24,7 @@ func TestValidateAliases(t *testing.T) {
 	}{
 		{"1.2.3", []string{"1", "1.2", "latest", "stable"}, true},
 		{"2.0.0-rc.1", []string{"preview"}, true},
+		{"5.0.0.2668-rc.1", []string{"5-prerelease", "5.0-prerelease"}, true},
 		{"1.2.3", nil, true},
 		{"1.2.3", []string{"latest", "latest"}, false},
 		{"1.2.3", []string{"1.2.3"}, false},
@@ -34,6 +35,7 @@ func TestValidateAliases(t *testing.T) {
 		{"2.0.0-rc.1", []string{"latest"}, false},
 		{"2.0.0-rc.1", []string{"stable"}, false},
 		{"2.0.0-rc.1", []string{"2.0"}, false},
+		{"2.0.0-rc.1", []string{"2"}, false},
 	} {
 		if err := ValidateAliases(tt.version, tt.aliases); (err == nil) != tt.valid {
 			t.Errorf("ValidateAliases(%q, %v) = %v; valid=%v", tt.version, tt.aliases, err, tt.valid)

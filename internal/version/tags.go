@@ -6,7 +6,10 @@ import (
 	"strings"
 )
 
-var aliasRE = regexp.MustCompile(`^[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}$`)
+var (
+	aliasRE         = regexp.MustCompile(`^[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}$`)
+	numericSeriesRE = regexp.MustCompile(`^[0-9]+(\.[0-9]+)*$`)
+)
 
 // ImageTags returns the default immutable tag and moving aliases.
 // The application version must have passed Validate.
@@ -54,7 +57,7 @@ func ValidateAliases(version string, aliases []string) error {
 // including when upstream versions have no prerelease suffix.
 func ValidatePrereleaseAliases(aliases []string) error {
 	for _, alias := range aliases {
-		if alias == "latest" || alias == "stable" || (len(alias) > 0 && alias[0] >= '0' && alias[0] <= '9') {
+		if alias == "latest" || alias == "stable" || numericSeriesRE.MatchString(alias) {
 			return fmt.Errorf("prerelease cannot own stable alias %q", alias)
 		}
 	}
