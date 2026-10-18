@@ -9,6 +9,7 @@ type track struct {
 	Name          string            `yaml:"name"`
 	Upstream      *upstream         `yaml:"upstream,omitempty"`
 	Version       string            `yaml:"version"`
+	Prerelease    bool              `yaml:"prerelease,omitempty"`
 	BaseImage     string            `yaml:"baseImage,omitempty"`
 	Aliases       []string          `yaml:"aliases"`
 	Context       string            `yaml:"context,omitempty"`
@@ -29,6 +30,7 @@ type upstream struct {
 type Build struct {
 	Track         string `json:"track"`
 	Version       string `json:"version"`
+	Prerelease    bool   `json:"prerelease"`
 	Image         string `json:"image"`
 	Aliases       string `json:"aliases"` // JSON array, including an explicit empty array.
 	Context       string `json:"context"`

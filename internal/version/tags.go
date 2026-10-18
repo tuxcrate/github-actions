@@ -43,11 +43,19 @@ func ValidateAliases(version string, aliases []string) error {
 			return fmt.Errorf("invalid, reserved, or duplicate alias %q", alias)
 		}
 		seen[alias] = true
-		if strings.Contains(version, "-") {
-			// Prereleases may own named channels, never stable numeric aliases.
-			if alias == "latest" || alias == "stable" || (alias[0] >= '0' && alias[0] <= '9') {
-				return fmt.Errorf("prerelease cannot own stable alias %q", alias)
-			}
+	}
+	if strings.Contains(version, "-") {
+		return ValidatePrereleaseAliases(aliases)
+	}
+	return nil
+}
+
+// ValidatePrereleaseAliases prevents a prerelease track from owning stable aliases,
+// including when upstream versions have no prerelease suffix.
+func ValidatePrereleaseAliases(aliases []string) error {
+	for _, alias := range aliases {
+		if alias == "latest" || alias == "stable" || (len(alias) > 0 && alias[0] >= '0' && alias[0] <= '9') {
+			return fmt.Errorf("prerelease cannot own stable alias %q", alias)
 		}
 	}
 	return nil
