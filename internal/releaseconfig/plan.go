@@ -59,20 +59,13 @@ func Plan(r io.Reader, repository string) ([]Build, error) {
 		if err := version.Validate(t.Version); err != nil {
 			return nil, fmt.Errorf("track %s: %w", t.Name, err)
 		}
-		if t.Aliases == nil {
-			return nil, fmt.Errorf("track %s must declare aliases (use [] for none)", t.Name)
-		}
-		t.Aliases = version.ExpandAliases(t.Version, t.Aliases)
-		if err := version.ValidateAliases(t.Version, t.Aliases); err != nil {
+		prerelease := t.Prerelease || strings.Contains(t.Version, "-")
+		imageVersion, tags, err := version.ResolveTags(t.Version, t.Tags, prerelease)
+		if err != nil {
 			return nil, fmt.Errorf("track %s: %w", t.Name, err)
 		}
-		prerelease := t.Prerelease || strings.Contains(t.Version, "-")
-		if prerelease {
-			if err := version.ValidatePrereleaseAliases(t.Aliases); err != nil {
-				return nil, fmt.Errorf("track %s: %w", t.Name, err)
-			}
-		}
-		for _, tag := range append([]string{t.Version}, t.Aliases...) {
+		prerelease = prerelease || strings.Contains(imageVersion, "-")
+		for _, tag := range tags {
 			if owner, exists := owners[tag]; exists {
 				return nil, fmt.Errorf("tag %q is owned by both %s and %s", tag, owner, t.Name)
 			}
@@ -80,6 +73,7 @@ func Plan(r io.Reader, repository string) ([]Build, error) {
 		}
 		b := defaults
 		b.Track, b.Version = t.Name, t.Version
+		b.ImageVersion = imageVersion
 		b.Prerelease = prerelease
 		appVersion := t.Version
 		if t.Upstream != nil {
@@ -90,8 +84,8 @@ func Plan(r io.Reader, repository string) ([]Build, error) {
 		if err := validateBaseImage(baseImage); err != nil {
 			return nil, fmt.Errorf("track %s: %w", t.Name, err)
 		}
-		aliases, _ := json.Marshal(t.Aliases)
-		b.Aliases = string(aliases)
+		expanded, _ := json.Marshal(tags)
+		b.Tags = string(expanded)
 		if t.Context != "" {
 			b.Context = t.Context
 		}

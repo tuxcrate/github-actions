@@ -71,7 +71,7 @@ jobs:
           persist-credentials: false
       - name: Build release tooling
         run: go build -C shared -o "$RUNNER_TEMP/container-release" ./cmd/container-release
-      - name: Validate root meta.yaml and alias ownership
+      - name: Validate root meta.yaml and tag ownership
         id: plan
         working-directory: source
         run: '"$RUNNER_TEMP/container-release" plan'
@@ -141,12 +141,16 @@ jobs:
           pull: true
           push: ${{ env.PUBLISH_PR == 'true' }}
           tags: ${{ steps.preview.outputs.tags }}
+          # Preserve ownership even when a rerun leaves an older index untagged.
+          annotations: |
+            index:io.tuxcrate.repository=${{ github.repository }}
+            index:io.tuxcrate.pull-request=${{ github.event.pull_request.number }}
           provenance: mode=max
           sbom: true
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.version=${{ matrix.version }}
+            org.opencontainers.image.version=${{ matrix.image-version }}
           # Check current package availability on every architecture, including
           # reruns after an upstream repository finishes publishing a version.
           no-cache: true
@@ -178,8 +182,9 @@ jobs:
       - name: Generate and validate synthetic release metadata
         env:
           APP_VERSION: ${{ matrix.version }}
+          IMAGE_VERSION: ${{ matrix.image-version }}
           TRACK: ${{ matrix.track }}
-          ALIASES: ${{ matrix.aliases }}
+          TAGS: ${{ matrix.tags }}
           PRERELEASE: ${{ matrix.prerelease }}
           IMAGE: ${{ matrix.image }}
           # This is a local image ID, not a published multiarch digest. The
@@ -324,15 +329,16 @@ jobs:
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.version=${{ matrix.version }}
+            org.opencontainers.image.version=${{ matrix.image-version }}
           cache-to: type=gha,mode=max,scope=container-${{ matrix.track }}
       - name: Reserve revision and create draft release
         id: release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           APP_VERSION: ${{ matrix.version }}
+          IMAGE_VERSION: ${{ matrix.image-version }}
           TRACK: ${{ matrix.track }}
-          ALIASES: ${{ matrix.aliases }}
+          TAGS: ${{ matrix.tags }}
           PRERELEASE: ${{ matrix.prerelease }}
           IMAGE: ${{ steps.metadata.outputs.image }}
           IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
@@ -342,8 +348,9 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           APP_VERSION: ${{ matrix.version }}
+          IMAGE_VERSION: ${{ matrix.image-version }}
           TRACK: ${{ matrix.track }}
-          ALIASES: ${{ matrix.aliases }}
+          TAGS: ${{ matrix.tags }}
           PRERELEASE: ${{ matrix.prerelease }}
           IMAGE: ${{ steps.metadata.outputs.image }}
           IMAGE_DIGEST: ${{ steps.build.outputs.digest }}

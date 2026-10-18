@@ -28,8 +28,8 @@ func configApp(t *testing.T, config string) (app, map[string]string) {
 
 func TestBuildPlan(t *testing.T) {
 	a, env := configApp(t, `{"tracks":[
- {"name":"stable","version":"1.2.3","aliases":["latest","stable","1.2"]},
- {"name":"preview","version":"2.0.0-rc.1","aliases":["preview"],"containerfile":"preview/Containerfile","buildArgs":{"REV":"2"}}
+ {"name":"stable","version":"1.2.3","tags":["${version}","latest","stable","1.2"]},
+ {"name":"preview","version":"2.0.0-rc.1","tags":["${version}","preview"],"containerfile":"preview/Containerfile","buildArgs":{"REV":"2"}}
 ]}`)
 	builds, err := a.builds()
 	if err != nil {
@@ -47,24 +47,24 @@ func TestBuildPlan(t *testing.T) {
 	}
 }
 
-func TestDerivedAliases(t *testing.T) {
+func TestDerivedTags(t *testing.T) {
 	for _, version := range []string{"0.7.0", "0.8.0", "12.34.56"} {
-		a, _ := configApp(t, `{"tracks":[{"name":"stable","version":"`+version+`","aliases":["{major}.{minor}","latest"]}]}`)
+		a, _ := configApp(t, `{"tracks":[{"name":"stable","version":"`+version+`","tags":["${version}","${major}.${minor}","latest"]}]}`)
 		builds, err := a.builds()
 		parts := strings.Split(version, ".")
-		if err != nil || builds[0].Aliases != `["`+parts[0]+`.`+parts[1]+`","latest"]` {
+		if err != nil || builds[0].Tags != `["`+version+`","`+parts[0]+`.`+parts[1]+`","latest"]` {
 			t.Fatalf("%s: %v: %v", version, builds, err)
 		}
 	}
 	for _, config := range []string{
-		`{"tracks":[{"name":"preview","version":"1.2.3-rc.1","aliases":["{major}.{minor}"]}]}`,
-		`{"tracks":[{"name":"stable","version":"1.2.3","aliases":["{major}.{minor}","1.2"]}]}`,
-		`{"tracks":[{"name":"stable","version":"1.2.3","aliases":["{patch}"]}]}`,
-		`{"tracks":[{"name":"a","version":"1.2.3","aliases":["{major}.{minor}"]},{"name":"b","version":"1.2.4","aliases":["1.2"]}]}`,
+		`{"tracks":[{"name":"preview","version":"1.2.3-rc.1","tags":["${version}","${major}.${minor}"]}]}`,
+		`{"tracks":[{"name":"stable","version":"1.2.3","tags":["${version}","${major}.${minor}","1.2"]}]}`,
+		`{"tracks":[{"name":"stable","version":"1.2.3","tags":["${version}","${patch}"]}]}`,
+		`{"tracks":[{"name":"a","version":"1.2.3","tags":["${version}","${major}.${minor}"]},{"name":"b","version":"1.2.4","tags":["${version}","1.2"]}]}`,
 	} {
 		a, _ := configApp(t, config)
 		if _, err := a.builds(); err == nil {
-			t.Fatalf("accepted invalid expanded aliases: %s", config)
+			t.Fatalf("accepted invalid expanded tags: %s", config)
 		}
 	}
 }
@@ -75,18 +75,19 @@ func TestInvalidConfigurations(t *testing.T) {
 		`{"typo":true,"tracks":[]}`,
 		`{"tracks":[]} {}`,
 		`{"tracks":[{"name":"stable","version":"1.2.3"}]}`,
-		`{"tracks":[{"name":"Stable","version":"1.2.3","aliases":[]}]}`,
-		`{"tracks":[{"name":"preview","version":"1.2.3-rc.1","aliases":["latest"]}]}`,
-		`{"tracks":[{"name":"preview","version":"1.2.3-rc.1","aliases":["stable"]}]}`,
-		`{"tracks":[{"name":"preview","version":"1.2.3-rc.1","aliases":["1.2"]}]}`,
-		`{"tracks":[{"name":"stable","version":"1.2.3","aliases":["1.2.3-r0"]}]}`,
-		`{"tracks":[{"name":"stable","version":"1.2.3","aliases":["2.0.0"]}]}`,
-		`{"tracks":[{"name":"stable","version":"1.2.3","aliases":["stable","stable"]}]}`,
-		`{"tracks":[{"name":"stable","version":"1.2.3","aliases":[],"context":"../other"}]}`,
-		`{"tracks":[{"name":"stable","version":"1.2.3","aliases":[],"buildArgs":{"APP_VERSION":"other"}}]}`,
-		`{"tracks":[{"name":"stable","version":"1.2.3","aliases":[],"buildArgs":{"ARG":"x\ny"}}]}`,
-		`{"tracks":[{"name":"a","version":"1.2.3","aliases":["latest"]},{"name":"b","version":"2.0.0","aliases":["latest"]}]}`,
-		`{"tracks":[{"name":"a","version":"1.2.3","aliases":[]},{"name":"b","version":"1.2.3","aliases":[]}]}`,
+		`{"tracks":[{"name":"Stable","version":"1.2.3","tags":["${version}"]}]}`,
+		`{"tracks":[{"name":"preview","version":"1.2.3-rc.1","tags":["${version}","latest"]}]}`,
+		`{"tracks":[{"name":"preview","version":"1.2.3-rc.1","tags":["${version}","stable"]}]}`,
+		`{"tracks":[{"name":"preview","version":"1.2.3-rc.1","tags":["${version}","1.2"]}]}`,
+		`{"tracks":[{"name":"stable","version":"1.2.3","tags":["${version}","1.2.3-r0"]}]}`,
+		`{"tracks":[{"name":"stable","version":"1.2.3","tags":["${version}","2.0.0"]}]}`,
+		`{"tracks":[{"name":"stable","version":"1.2.3","tags":["${version}","stable","stable"]}]}`,
+		`{"tracks":[{"name":"stable","version":"1.2.3","tags":["${version}"],"context":"../other"}]}`,
+		`{"tracks":[{"name":"stable","version":"1.2.3","tags":["${version}"],"buildArgs":{"APP_VERSION":"other"}}]}`,
+		`{"tracks":[{"name":"stable","version":"1.2.3","tags":["${version}"],"buildArgs":{"ARG":"x\ny"}}]}`,
+		`{"tracks":[{"name":"a","version":"1.2.3","tags":["${version}","latest"]},{"name":"b","version":"2.0.0","tags":["${version}","latest"]}]}`,
+		`{"tracks":[{"name":"a","version":"1.2.3","tags":["${version}"]},{"name":"b","version":"1.2.3","tags":["${version}"]}]}`,
+		`{"tracks":[{"name":"stable","version":"1.2.3","tags":[]}]}`,
 	} {
 		t.Run(config, func(t *testing.T) {
 			a, _ := configApp(t, config)
@@ -111,22 +112,22 @@ func TestPlanRequiresRootMetadata(t *testing.T) {
 
 func TestExplicitTags(t *testing.T) {
 	a, env := testApp(t)
-	env["ALIASES"] = `["stable","latest"]`
+	env["TAGS"] = `["1.2.3","stable","latest"]`
 	got, err := a.tags("1.2.3", 4)
 	if err != nil || !reflect.DeepEqual(got, []string{"1.2.3-r4", "1.2.3", "stable", "latest"}) {
 		t.Fatalf("%v: %v", got, err)
 	}
-	env["ALIASES"] = `[]`
+	env["TAGS"] = `["2.0.0-rc.1"]`
 	got, err = a.tags("2.0.0-rc.1", 0)
 	if err != nil || len(got) != 2 {
 		t.Fatalf("%v: %v", got, err)
 	}
-	env["ALIASES"] = ""
+	env["TAGS"] = `["2.0.0-rc.1","preview"]`
 	got, err = a.tags("2.0.0-rc.1", 0)
 	if err != nil || contains(got, "latest") || !contains(got, "preview") {
 		t.Fatalf("%v: %v", got, err)
 	}
-	env["ALIASES"] = `["latest"]`
+	env["TAGS"] = `["2.0.0-rc.1","latest"]`
 	if _, err := a.tags("2.0.0-rc.1", 0); err == nil {
 		t.Fatal("prerelease stole latest")
 	}
@@ -148,8 +149,9 @@ func TestPreviousReleaseTrack(t *testing.T) {
 func TestPrereleaseReservation(t *testing.T) {
 	a, env := testApp(t)
 	env["APP_VERSION"] = "2.0.0-rc.1"
+	env["IMAGE_VERSION"] = "2.0.0-rc.1"
 	env["TRACK"] = "preview"
-	env["ALIASES"] = `["preview"]`
+	env["TAGS"] = `["2.0.0-rc.1","preview"]`
 	a.exec = func(input string, args ...string) (commandResult, error) {
 		switch {
 		case args[0] == "gh" && args[1] == "api" && strings.HasPrefix(args[2], "repos/"):
@@ -194,7 +196,7 @@ func TestPrereleaseReservation(t *testing.T) {
 }
 
 func TestPlanMetadataOverrides(t *testing.T) {
-	config := `{"image":"ghcr.io/tuxcrate/custom","tracks":[{"name":"stable","version":"1.2.3","aliases":[],"context":"app","platforms":"linux/amd64","buildArgs":{"FOO":"bar"}}]}`
+	config := `{"image":"ghcr.io/tuxcrate/custom","tracks":[{"name":"stable","version":"1.2.3","tags":["${version}"],"context":"app","platforms":"linux/amd64","buildArgs":{"FOO":"bar"}}]}`
 	a, env := configApp(t, config)
 	// Workflow environment cannot compete with the metadata source of truth.
 	env["IMAGE"] = "ghcr.io/tuxcrate/other"
@@ -212,7 +214,7 @@ func TestPlanMetadataOverrides(t *testing.T) {
 func TestManifest(t *testing.T) {
 	a, env := testApp(t)
 	env["RELEASE_TAG"] = "v0.7.0-r3"
-	env["ALIASES"] = `["stable","latest"]`
+	env["TAGS"] = `["0.7.0","stable","latest"]`
 	env["PLATFORMS"] = " linux/amd64 , linux/arm64 "
 	var calls []string
 	a.exec = imageOSRunner(t, env["IMAGE"]+"@"+env["IMAGE_DIGEST"], "linux/amd64", map[string]string{
@@ -239,7 +241,7 @@ func TestManifest(t *testing.T) {
 	if err := json.Unmarshal(data, &m); err != nil {
 		t.Fatal(err)
 	}
-	if m["schemaVersion"] != float64(1) || m["revision"] != float64(3) || m["immutableTag"] != "0.7.0-r3" || m["track"] != "stable" || m["digest"] != env["IMAGE_DIGEST"] {
+	if m["schemaVersion"] != float64(2) || m["imageVersion"] != "0.7.0" || m["version"] != "0.7.0" || m["revision"] != float64(3) || m["immutableTag"] != "0.7.0-r3" || m["track"] != "stable" || m["digest"] != env["IMAGE_DIGEST"] {
 		t.Fatal(m)
 	}
 	if m["os_flavor"] != "debian" || m["os_version"] != "13.7" {
@@ -275,7 +277,9 @@ func TestCheckManifest(t *testing.T) {
 		{name: "missing digest", key: "IMAGE_DIGEST"},
 		{name: "invalid image", key: "IMAGE", value: "invalid"},
 		{name: "invalid track", key: "TRACK", value: "invalid track"},
-		{name: "invalid aliases", key: "ALIASES", value: `[""]`},
+		{name: "invalid tags", key: "TAGS", value: `[""]`},
+		{name: "missing image version", key: "IMAGE_VERSION"},
+		{name: "missing tags", key: "TAGS"},
 		{name: "missing platforms", key: "PLATFORMS"},
 		{name: "empty second platform", key: "PLATFORMS", value: "linux/amd64,"},
 		{name: "whitespace-only platform", key: "PLATFORMS", value: "linux/amd64, "},
@@ -288,7 +292,7 @@ func TestCheckManifest(t *testing.T) {
 			a, env := testApp(t)
 			env["LOCAL_IMAGE"] = "tuxcrate-pr-os-check:stable"
 			env["TRACK"] = "stable"
-			env["ALIASES"] = `["stable","latest"]`
+			env["TAGS"] = `["0.7.0","stable","latest"]`
 			// PR checks synthesize their own tag instead of reserving a revision.
 			env["RELEASE_TAG"] = "not-a-real-release"
 			if tt.key != "" {
@@ -329,7 +333,7 @@ func TestCheckManifest(t *testing.T) {
 			if err := json.Unmarshal(manifest, &fields); err != nil {
 				t.Fatal(err)
 			}
-			for _, key := range []string{"schemaVersion", "image", "track", "version", "revision", "immutableTag", "digest", "aliasesAtPublication", "platforms", "sourceCommit", "os_flavor", "os_version"} {
+			for _, key := range []string{"schemaVersion", "image", "track", "version", "imageVersion", "revision", "immutableTag", "digest", "aliasesAtPublication", "platforms", "sourceCommit", "os_flavor", "os_version"} {
 				if value, ok := fields[key]; !ok || value == nil || value == "" {
 					t.Fatalf("missing or empty %s in %s", key, manifest)
 				}
@@ -354,13 +358,13 @@ func TestPerTrackBaseImages(t *testing.T) {
   - name: stable
     version: "1.2.3"
     baseImage: ` + base + `
-    aliases: [latest]
+    tags: ["${version}", latest]
     buildArgs:
       REV: "1"
   - name: preview
     version: "2.0.0-rc.1"
     baseImage: "` + override + `"
-    aliases: [preview]
+    tags: ["${version}", preview]
 `
 	a, env := configApp(t, config)
 	builds, err := a.builds()
@@ -381,7 +385,7 @@ func TestPerTrackBaseImages(t *testing.T) {
 
 func TestTrackBaseImage(t *testing.T) {
 	base := "debian:13-slim@sha256:" + strings.Repeat("a", 64)
-	a, _ := configApp(t, `{"tracks":[{"name":"stable","version":"1.2.3","aliases":[],"baseImage":"`+base+`"}]}`)
+	a, _ := configApp(t, `{"tracks":[{"name":"stable","version":"1.2.3","tags":["${version}"],"baseImage":"`+base+`"}]}`)
 	builds, err := a.builds()
 	if err != nil || builds[0].BuildArgs != "APP_VERSION=1.2.3\nBASE_IMAGE="+base {
 		t.Fatalf("%v: %v", builds, err)
@@ -390,9 +394,9 @@ func TestTrackBaseImage(t *testing.T) {
 
 func TestInvalidBaseImageConfiguration(t *testing.T) {
 	for _, config := range []string{
-		`{"baseImage":"debian:13-slim","tracks":[{"name":"stable","version":"1.2.3","aliases":[]}]}`,
-		`{"tracks":[{"name":"stable","version":"1.2.3","aliases":[],"baseImage":"debian:13-slim"}]}`,
-		`{"tracks":[{"name":"stable","version":"1.2.3","aliases":[],"buildArgs":{"BASE_IMAGE":"debian:13-slim"}}]}`,
+		`{"baseImage":"debian:13-slim","tracks":[{"name":"stable","version":"1.2.3","tags":["${version}"]}]}`,
+		`{"tracks":[{"name":"stable","version":"1.2.3","tags":["${version}"],"baseImage":"debian:13-slim"}]}`,
+		`{"tracks":[{"name":"stable","version":"1.2.3","tags":["${version}"],"buildArgs":{"BASE_IMAGE":"debian:13-slim"}}]}`,
 	} {
 		a, _ := configApp(t, config)
 		if _, err := a.builds(); err == nil {

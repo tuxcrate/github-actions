@@ -28,27 +28,16 @@ func (a app) trackName() string {
 }
 
 func (a app) isPrerelease() bool {
-	return a.getenv("PRERELEASE") == "true" || strings.Contains(a.getenv("APP_VERSION"), "-")
+	return a.getenv("PRERELEASE") == "true" || strings.Contains(a.getenv("APP_VERSION"), "-") || strings.Contains(a.getenv("IMAGE_VERSION"), "-")
 }
 
-func (a app) tags(appVersion string, revision uint64) ([]string, error) {
-	if a.getenv("ALIASES") == "" {
-		if a.isPrerelease() {
-			return []string{fmt.Sprintf("%s-r%d", appVersion, revision), appVersion, "preview"}, nil
-		}
-		return version.ImageTags(appVersion, revision), nil
+func (a app) tags(imageVersion string, revision uint64) ([]string, error) {
+	var tags []string
+	if err := json.Unmarshal([]byte(a.getenv("TAGS")), &tags); err != nil {
+		return nil, fmt.Errorf("decode tags: %w", err)
 	}
-	var aliases []string
-	if err := json.Unmarshal([]byte(a.getenv("ALIASES")), &aliases); err != nil {
-		return nil, fmt.Errorf("decode aliases: %w", err)
-	}
-	if err := version.ValidateAliases(appVersion, aliases); err != nil {
+	if err := version.ValidateTags(imageVersion, tags, a.isPrerelease()); err != nil {
 		return nil, err
 	}
-	if a.isPrerelease() {
-		if err := version.ValidatePrereleaseAliases(aliases); err != nil {
-			return nil, err
-		}
-	}
-	return append([]string{fmt.Sprintf("%s-r%d", appVersion, revision), appVersion}, aliases...), nil
+	return append([]string{fmt.Sprintf("%s-r%d", imageVersion, revision)}, tags...), nil
 }
