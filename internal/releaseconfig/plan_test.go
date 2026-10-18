@@ -89,90 +89,100 @@ func TestPrereleaseSuffixCannotBeDisabled(t *testing.T) {
 
 func TestPlanSkipsSupersededExplicitPrereleases(t *testing.T) {
 	for _, tt := range []struct {
-		name   string
-		tracks string
-		want   []string
+		name    string
+		tracks  string
+		want    []string
+		wantErr string
 	}{
 		{
 			name: "radarr upstream versions",
 			tracks: `
   - name: stable
     upstream: {datasource: github-releases, depName: Radarr/Radarr, version: "6.4.4.10685"}
-    aliases: [latest]
+    tags: ["${version}", latest]
   - name: prerelease
     upstream: {datasource: github-releases, depName: Radarr/Radarr, version: "6.4.4.10684"}
     prerelease: true
-    aliases: ["{major}-prerelease", "{major}.{minor}-prerelease"]`,
+    tags: ["${version}-prerelease", "${major}-prerelease", "${major}.${minor}-prerelease"]`,
 			want: []string{"stable"},
 		},
 		{
 			name: "all stable tracks regardless of name or order",
 			tracks: `
-  - {name: preview, version: "2.0.0", prerelease: true, aliases: [preview]}
-  - {name: older, version: "1.0.0", aliases: []}
-  - {name: current, version: "3.0.0", aliases: []}
-  - {name: develop, version: "4.0.0", prerelease: true, aliases: [develop]}`,
+  - {name: preview, version: "2.0.0", prerelease: true, tags: ["${version}-prerelease", preview]}
+  - {name: older, version: "1.0.0", tags: ["${version}"]}
+  - {name: current, version: "3.0.0", tags: ["${version}"]}
+  - {name: develop, version: "4.0.0", prerelease: true, tags: ["${version}-prerelease", develop]}`,
 			want: []string{"older", "current", "develop"},
 		},
 		{
 			name: "prerelease alone",
 			tracks: `
-  - {name: preview, version: "1.0.0", prerelease: true, aliases: [preview]}`,
+  - {name: preview, version: "1.0.0", prerelease: true, tags: ["${version}-prerelease", preview]}`,
 			want: []string{"preview"},
 		},
 		{
 			name: "other prereleases do not suppress builds",
 			tracks: `
-  - {name: preview, version: "1.0.0", prerelease: true, aliases: [preview]}
-  - {name: develop, version: "3.0.0", prerelease: true, aliases: [develop]}
-  - {name: rc, version: "4.0.0-rc.1", aliases: [rc]}`,
+  - {name: preview, version: "1.0.0", prerelease: true, tags: ["${version}-prerelease", preview]}
+  - {name: develop, version: "3.0.0", prerelease: true, tags: ["${version}-prerelease", develop]}
+  - {name: rc, version: "4.0.0-rc.1", tags: ["${version}", rc]}`,
 			want: []string{"preview", "develop", "rc"},
 		},
 		{
 			name: "suffix without explicit flag is not filtered",
 			tracks: `
-  - {name: preview, version: "1.0.0-rc.1", aliases: [preview]}
-  - {name: stable, version: "2.0.0", aliases: [latest]}`,
+  - {name: preview, version: "1.0.0-rc.1", tags: ["${version}", preview]}
+  - {name: stable, version: "2.0.0", tags: ["${version}", latest]}`,
 			want: []string{"preview", "stable"},
 		},
 		{
 			name: "explicit suffixed prerelease is filtered",
 			tracks: `
-  - {name: preview, version: "1.0.0-rc.1", prerelease: true, aliases: [preview]}
-  - {name: stable, version: "1.0.0", aliases: [latest]}`,
+  - {name: preview, version: "1.0.0-rc.1", prerelease: true, tags: ["${version}", preview]}
+  - {name: stable, version: "1.0.0", tags: ["${version}", latest]}`,
 			want: []string{"stable"},
 		},
 		{
 			name: "debian revision is not an application prerelease",
 			tracks: `
-  - {name: preview, version: "1.0.0", prerelease: true, aliases: [preview]}
+  - {name: preview, version: "1.0.0", prerelease: true, tags: ["${version}-prerelease", preview]}
   - name: stable
     upstream:
       datasource: deb
       depName: example
       registryUrl: "https://example.com/apt?suite=stable&components=main&binaryArch=amd64"
       version: "2.0.0-1"
-    aliases: [latest]`,
+    tags: ["${version}", latest]`,
 			want: []string{"stable"},
 		},
 		{
-			name: "equal numeric versions retain ownership validation",
+			name: "equal numeric versions with distinct image tags are retained",
 			tracks: `
-  - {name: preview, version: "1.0.0", prerelease: true, aliases: [preview]}
-  - {name: stable, version: "1.0.0", aliases: [latest]}`,
+  - {name: preview, version: "1.0.0", prerelease: true, tags: ["${version}-prerelease", preview]}
+  - {name: stable, version: "1.0.0", tags: ["${version}", latest]}`,
+			want: []string{"preview", "stable"},
 		},
 		{
 			name: "skipped tracks are still validated",
 			tracks: `
-  - {name: preview, version: "1.0.0", prerelease: true, aliases: [latest]}
-  - {name: stable, version: "2.0.0", aliases: []}`,
+  - {name: preview, version: "1.0.0", prerelease: true, tags: ["${version}-prerelease", latest]}
+  - {name: stable, version: "2.0.0", tags: ["${version}"]}`,
+			wantErr: `prerelease cannot own stable tag "latest"`,
+		},
+		{
+			name: "skipped tracks retain ownership validation",
+			tracks: `
+  - {name: preview, version: "1.0.0", prerelease: true, tags: ["${version}-prerelease", shared]}
+  - {name: stable, version: "2.0.0", tags: ["${version}", shared]}`,
+			wantErr: `tag "shared" is owned by both preview and stable`,
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			builds, err := Plan(strings.NewReader("tracks:"+tt.tracks), "tuxcrate/test")
-			if tt.want == nil {
-				if err == nil {
-					t.Fatal("accepted invalid configuration")
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("got error %v; want error containing %q", err, tt.wantErr)
 				}
 				return
 			}
