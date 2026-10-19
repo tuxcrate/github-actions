@@ -212,10 +212,10 @@ func TestWorkflowPRImages(t *testing.T) {
 			if s.With["context"] != "${{ matrix.context }}" || s.With["file"] != "${{ matrix.containerfile }}" || !strings.Contains(s.With["build-args"], "${{ matrix.build-args }}") || s.With["push"] != "" {
 				t.Fatal("validation must build the same source and arguments without pushing")
 			}
-		case s.Name == "Check out shared OS validation tooling":
+		case s.Name == "Check out shared build tooling":
 			tooling = true
-			if !loaded || s.If != "" || s.With["repository"] != "tuxcrate/github-actions" || s.With["ref"] != "${{ inputs.shared-ref }}" || s.With["persist-credentials"] != "false" {
-				t.Fatal("validation tooling must be checked out after the image build without credentials")
+			if built || s.If != "" || s.With["repository"] != "tuxcrate/github-actions" || s.With["ref"] != "${{ inputs.shared-ref }}" || s.With["persist-credentials"] != "false" {
+				t.Fatal("trusted tooling must be checked out before the image build without credentials")
 			}
 		case s.Name == "Generate and validate synthetic release metadata":
 			validated = true
@@ -271,6 +271,53 @@ func TestWorkflowPRImages(t *testing.T) {
 	}
 	if !strings.Contains(workflow.Jobs["release"].If, "github.ref == format('refs/heads/{0}', github.event.repository.default_branch)") || strings.Contains(workflow.Jobs["release"].If, "pull_request") {
 		t.Fatal("PRs must not enter the production release job")
+	}
+}
+
+func TestWorkflowUpstreamMetadata(t *testing.T) {
+	data, err := os.ReadFile("../../.github/workflows/container.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var workflow struct {
+		Jobs map[string]struct {
+			Steps []struct {
+				ID   string            `yaml:"id"`
+				If   string            `yaml:"if"`
+				Uses string            `yaml:"uses"`
+				Run  string            `yaml:"run"`
+				Env  map[string]string `yaml:"env"`
+				With map[string]string `yaml:"with"`
+			} `yaml:"steps"`
+		} `yaml:"jobs"`
+	}
+	if err := yaml.Unmarshal(data, &workflow); err != nil {
+		t.Fatal(err)
+	}
+	for _, job := range []string{"pull-request", "release"} {
+		prefetched, builds := false, 0
+		for _, step := range workflow.Jobs[job].Steps {
+			if step.ID == "upstream" {
+				prefetched = true
+				if step.If != "" || step.Env["GH_TOKEN"] != "${{ secrets.GITHUB_TOKEN }}" || step.Env["TRACK"] != "${{ matrix.track }}" || !strings.Contains(step.Run, "upstream-release") {
+					t.Fatalf("%s must prefetch metadata using the job token, including fork PRs", job)
+				}
+			}
+			if strings.HasPrefix(step.Uses, "docker/build-push-action@") {
+				builds++
+				if !prefetched || step.With["secret-files"] != "${{ steps.upstream.outputs.secret-files }}" {
+					t.Fatalf("%s build must receive prefetched metadata", job)
+				}
+				for key, value := range step.With {
+					if strings.Contains(value, "secrets.") || (key == "secrets" && value != "") {
+						t.Fatalf("%s must not pass tokens to the container build", job)
+					}
+				}
+			}
+		}
+		if !prefetched || builds == 0 {
+			t.Fatalf("%s missing prefetch or builds", job)
+		}
 	}
 }
 

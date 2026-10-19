@@ -21,6 +21,7 @@ func TestExecute(t *testing.T) {
 		{"plan", []string{"plan"}, "configuration requires 1–256 tracks"},
 		{"manifest", []string{"manifest"}, "app-version must be"},
 		{"check-manifest", []string{"check-manifest"}, "a local image is required"},
+		{"upstream-release", []string{"upstream-release"}, "configuration requires 1–256 tracks"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			a, env := configApp(t, "tracks: []\n")
