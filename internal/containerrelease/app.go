@@ -25,9 +25,7 @@ func (a app) execute(args []string) error {
 			return a.manifest()
 		case "check-manifest":
 			return a.checkManifest()
-		case "upstream-release":
-			return a.upstreamRelease()
 		}
 	}
-	return errors.New("usage: container-release {plan|metadata|reserve|manifest|check-manifest|upstream-release}")
+	return errors.New("usage: container-release {plan|metadata|reserve|manifest|check-manifest}")
 }

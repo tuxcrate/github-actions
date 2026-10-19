@@ -98,22 +98,6 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - name: Check out shared build tooling
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          repository: tuxcrate/github-actions
-          ref: ${{ inputs.shared-ref }}
-          path: .tuxcrate-release-tooling
-          persist-credentials: false
-      - name: Prefetch public upstream release metadata
-        id: upstream
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TRACK: ${{ matrix.track }}
-          GOWORK: 'off'
-        run: |
-          go build -C .tuxcrate-release-tooling -o "$RUNNER_TEMP/container-release" ./cmd/container-release
-          "$RUNNER_TEMP/container-release" upstream-release
       - name: Set up QEMU
         uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4
       - name: Set up Buildx
@@ -153,11 +137,12 @@ jobs:
           platforms: ${{ matrix.platforms }}
           build-args: |
             ${{ matrix.build-args }}
-            ${{ steps.upstream.outputs.build-args }}
             BUILDKIT_DOCKERFILE_CHECK=skip=InvalidDefaultArgInFrom
           pull: true
           push: ${{ env.PUBLISH_PR == 'true' }}
           tags: ${{ steps.preview.outputs.tags }}
+          secrets: |
+            github_token=${{ github.event.pull_request.head.repo.full_name == github.repository && secrets.GITHUB_TOKEN || '' }}
           # Preserve ownership even when a rerun leaves an older index untagged.
           annotations: |
             index:io.tuxcrate.repository=${{ github.repository }}
@@ -182,14 +167,22 @@ jobs:
           platforms: ${{ steps.preview.outputs.platform }}
           build-args: |
             ${{ matrix.build-args }}
-            ${{ steps.upstream.outputs.build-args }}
             BUILDKIT_DOCKERFILE_CHECK=skip=InvalidDefaultArgInFrom
           load: true
           tags: tuxcrate-pr-os-check:${{ matrix.track }}
+          secrets: |
+            github_token=${{ github.event.pull_request.head.repo.full_name == github.repository && secrets.GITHUB_TOKEN || '' }}
           provenance: false
           sbom: false
           # Reuse the just-built layers, including for fork PRs that cannot push.
           cache-from: type=gha,scope=container-pr-${{ github.event.pull_request.number }}-${{ matrix.track }}
+      - name: Check out shared OS validation tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: tuxcrate/github-actions
+          ref: ${{ inputs.shared-ref }}
+          path: .tuxcrate-release-tooling
+          persist-credentials: false
       - name: Generate and validate synthetic release metadata
         env:
           APP_VERSION: ${{ matrix.version }}
@@ -205,6 +198,7 @@ jobs:
           LOCAL_IMAGE: tuxcrate-pr-os-check:${{ matrix.track }}
         run: |
           set -euo pipefail
+          go build -C .tuxcrate-release-tooling -o "$RUNNER_TEMP/container-release" ./cmd/container-release
           mkdir -p "$RUNNER_TEMP/pr-release-metadata"
           cd "$RUNNER_TEMP/pr-release-metadata"
           "$RUNNER_TEMP/container-release" check-manifest
@@ -302,15 +296,7 @@ jobs:
           path: shared
           persist-credentials: false
       - name: Build release tooling
-        env:
-          GOWORK: 'off'
         run: go build -C ../shared -o "$RUNNER_TEMP/container-release" ./cmd/container-release
-      - name: Prefetch public upstream release metadata
-        id: upstream
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TRACK: ${{ matrix.track }}
-        run: '"$RUNNER_TEMP/container-release" upstream-release'
       - name: Validate release metadata
         id: metadata
         env:
@@ -336,13 +322,14 @@ jobs:
           platforms: ${{ matrix.platforms }}
           build-args: |
             ${{ matrix.build-args }}
-            ${{ steps.upstream.outputs.build-args }}
             BUILDKIT_DOCKERFILE_CHECK=skip=InvalidDefaultArgInFrom
           # Pull alone does not refresh a cached apt-get layer. Every release
           # must actually install the currently available security updates.
           pull: true
           no-cache: true
           outputs: type=image,name=${{ steps.metadata.outputs.image }},push-by-digest=true,name-canonical=true,push=true
+          secrets: |
+            github_token=${{ secrets.GITHUB_TOKEN }}
           provenance: mode=max
           sbom: true
           labels: |
