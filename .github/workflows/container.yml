@@ -153,11 +153,11 @@ jobs:
           platforms: ${{ matrix.platforms }}
           build-args: |
             ${{ matrix.build-args }}
+            ${{ steps.upstream.outputs.build-args }}
             BUILDKIT_DOCKERFILE_CHECK=skip=InvalidDefaultArgInFrom
           pull: true
           push: ${{ env.PUBLISH_PR == 'true' }}
           tags: ${{ steps.preview.outputs.tags }}
-          secret-files: ${{ steps.upstream.outputs.secret-files }}
           # Preserve ownership even when a rerun leaves an older index untagged.
           annotations: |
             index:io.tuxcrate.repository=${{ github.repository }}
@@ -182,10 +182,10 @@ jobs:
           platforms: ${{ steps.preview.outputs.platform }}
           build-args: |
             ${{ matrix.build-args }}
+            ${{ steps.upstream.outputs.build-args }}
             BUILDKIT_DOCKERFILE_CHECK=skip=InvalidDefaultArgInFrom
           load: true
           tags: tuxcrate-pr-os-check:${{ matrix.track }}
-          secret-files: ${{ steps.upstream.outputs.secret-files }}
           provenance: false
           sbom: false
           # Reuse the just-built layers, including for fork PRs that cannot push.
@@ -336,13 +336,13 @@ jobs:
           platforms: ${{ matrix.platforms }}
           build-args: |
             ${{ matrix.build-args }}
+            ${{ steps.upstream.outputs.build-args }}
             BUILDKIT_DOCKERFILE_CHECK=skip=InvalidDefaultArgInFrom
           # Pull alone does not refresh a cached apt-get layer. Every release
           # must actually install the currently available security updates.
           pull: true
           no-cache: true
           outputs: type=image,name=${{ steps.metadata.outputs.image }},push-by-digest=true,name-canonical=true,push=true
-          secret-files: ${{ steps.upstream.outputs.secret-files }}
           provenance: mode=max
           sbom: true
           labels: |

@@ -305,8 +305,8 @@ func TestWorkflowUpstreamMetadata(t *testing.T) {
 			}
 			if strings.HasPrefix(step.Uses, "docker/build-push-action@") {
 				builds++
-				if !prefetched || step.With["secret-files"] != "${{ steps.upstream.outputs.secret-files }}" {
-					t.Fatalf("%s build must receive prefetched metadata", job)
+				if !prefetched || !strings.Contains(step.With["build-args"], "${{ steps.upstream.outputs.build-args }}") || step.With["secret-files"] != "" {
+					t.Fatalf("%s build must receive resolved public build arguments, not JSON secrets", job)
 				}
 				for key, value := range step.With {
 					if strings.Contains(value, "secrets.") || (key == "secrets" && value != "") {

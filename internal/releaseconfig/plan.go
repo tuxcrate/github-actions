@@ -59,6 +59,9 @@ func Plan(r io.Reader, repository string) ([]Build, error) {
 		if err := version.Validate(t.Version); err != nil {
 			return nil, fmt.Errorf("track %s: %w", t.Name, err)
 		}
+		if _, err := t.githubSource(); err != nil {
+			return nil, fmt.Errorf("track %s: %w", t.Name, err)
+		}
 		prerelease := t.Prerelease || strings.Contains(t.Version, "-")
 		imageVersion, tags, err := version.ResolveTags(t.Version, t.Tags, prerelease)
 		if err != nil {
@@ -103,7 +106,7 @@ func Plan(r io.Reader, repository string) ([]Build, error) {
 		}
 		keys := make([]string, 0, len(t.BuildArgs))
 		for key, value := range t.BuildArgs {
-			if !argRE.MatchString(key) || key == "APP_VERSION" || key == "BASE_IMAGE" || strings.ContainsAny(value, "\r\n") {
+			if !argRE.MatchString(key) || key == "APP_VERSION" || key == "BASE_IMAGE" || strings.HasPrefix(key, "UPSTREAM_") || strings.ContainsAny(value, "\r\n") {
 				return nil, fmt.Errorf("invalid build argument %q", key)
 			}
 			keys = append(keys, key)

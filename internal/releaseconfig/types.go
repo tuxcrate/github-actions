@@ -8,6 +8,7 @@ type trackConfig struct {
 type track struct {
 	Name          string            `yaml:"name"`
 	Upstream      *upstream         `yaml:"upstream,omitempty"`
+	GitHubRelease *GitHubRelease    `yaml:"githubRelease,omitempty"`
 	Version       string            `yaml:"version"`
 	Prerelease    bool              `yaml:"prerelease,omitempty"`
 	BaseImage     string            `yaml:"baseImage,omitempty"`
@@ -18,7 +19,15 @@ type track struct {
 	BuildArgs     map[string]string `yaml:"buildArgs,omitempty"`
 }
 
-// upstream is discovery metadata for Renovate, not a runtime download source.
+// GitHubRelease opts a track into authenticated release asset resolution.
+// Tag and asset names support the ${version} placeholder.
+type GitHubRelease struct {
+	Tag    string            `yaml:"tag"`
+	Assets map[string]string `yaml:"assets"`
+}
+
+// upstream describes Renovate discovery. The optional githubRelease mapping
+// explicitly opts into resolving build inputs from this upstream's release.
 type upstream struct {
 	Datasource  string `yaml:"datasource"`
 	DepName     string `yaml:"depName"`
