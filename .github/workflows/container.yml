@@ -141,6 +141,8 @@ jobs:
           pull: true
           push: ${{ env.PUBLISH_PR == 'true' }}
           tags: ${{ steps.preview.outputs.tags }}
+          secrets: |
+            github_token=${{ github.event.pull_request.head.repo.full_name == github.repository && secrets.GITHUB_TOKEN || '' }}
           # Preserve ownership even when a rerun leaves an older index untagged.
           annotations: |
             index:io.tuxcrate.repository=${{ github.repository }}
@@ -168,6 +170,8 @@ jobs:
             BUILDKIT_DOCKERFILE_CHECK=skip=InvalidDefaultArgInFrom
           load: true
           tags: tuxcrate-pr-os-check:${{ matrix.track }}
+          secrets: |
+            github_token=${{ github.event.pull_request.head.repo.full_name == github.repository && secrets.GITHUB_TOKEN || '' }}
           provenance: false
           sbom: false
           # Reuse the just-built layers, including for fork PRs that cannot push.
@@ -324,6 +328,8 @@ jobs:
           pull: true
           no-cache: true
           outputs: type=image,name=${{ steps.metadata.outputs.image }},push-by-digest=true,name-canonical=true,push=true
+          secrets: |
+            github_token=${{ secrets.GITHUB_TOKEN }}
           provenance: mode=max
           sbom: true
           labels: |

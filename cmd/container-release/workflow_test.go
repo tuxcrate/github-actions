@@ -274,6 +274,46 @@ func TestWorkflowPRImages(t *testing.T) {
 	}
 }
 
+func TestWorkflowGitHubBuildSecret(t *testing.T) {
+	data, err := os.ReadFile("../../.github/workflows/container.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var workflow struct {
+		Jobs map[string]struct {
+			Steps []struct {
+				Uses string            `yaml:"uses"`
+				With map[string]string `yaml:"with"`
+			} `yaml:"steps"`
+		} `yaml:"jobs"`
+	}
+	if err := yaml.Unmarshal(data, &workflow); err != nil {
+		t.Fatal(err)
+	}
+	for _, job := range []string{"pull-request", "release"} {
+		builds := 0
+		want := "github_token=${{ secrets.GITHUB_TOKEN }}"
+		if job == "pull-request" {
+			want = "github_token=${{ github.event.pull_request.head.repo.full_name == github.repository && secrets.GITHUB_TOKEN || '' }}"
+		}
+		for _, step := range workflow.Jobs[job].Steps {
+			if !strings.HasPrefix(step.Uses, "docker/build-push-action@") {
+				continue
+			}
+			builds++
+			if strings.TrimSpace(step.With["secrets"]) != want {
+				t.Fatalf("%s must use a BuildKit secret and exclude fork PRs", job)
+			}
+			if strings.Contains(step.With["build-args"], "secrets.") {
+				t.Fatalf("%s must not pass credentials as build arguments", job)
+			}
+		}
+		if builds == 0 {
+			t.Fatalf("missing %s builds", job)
+		}
+	}
+}
+
 func testPRImageComment(t *testing.T, script string) {
 	t.Helper()
 	for _, track := range []string{"stable", "preview"} {
