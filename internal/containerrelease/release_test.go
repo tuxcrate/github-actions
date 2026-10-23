@@ -113,7 +113,7 @@ func TestCurrentCommit(t *testing.T) {
 	for _, head := range []string{"old", strings.Repeat("b", 40)} {
 		a, env := testApp(t)
 		a.exec = func(_ string, args ...string) (commandResult, error) {
-			want := []string{"gh", "api", "repos/tuxcrate/zrepl/git/ref/heads/main", "--jq", ".object.sha"}
+			want := []string{"gh", "api", "repos/tuxcrate/zrepl/git/ref/heads/main", "--jq", ".object.sha", "--include"}
 			if !reflect.DeepEqual(args, want) {
 				t.Fatal(args)
 			}
@@ -195,11 +195,11 @@ func TestReservation(t *testing.T) {
 				var stdout string
 				switch calls {
 				case 1:
-					want = []string{"gh", "api", "repos/tuxcrate/zrepl/git/ref/heads/main", "--jq", ".object.sha"}
-					stdout = env["GITHUB_SHA"]
+					want = []string{"gh", "api", "repos/tuxcrate/zrepl/git/ref/heads/main", "--jq", ".object.sha", "--include"}
+					stdout = "HTTP/2.0 200 OK\r\nX-Github-Request-Id: HEAD\r\n\r\n" + env["GITHUB_SHA"]
 				case 2:
-					want = []string{"gh", "api", "--paginate", "--slurp", "repos/tuxcrate/zrepl/releases?per_page=100"}
-					stdout = `[[{"tag_name":"v0.7.0-r3","draft":true}],[{"tag_name":"v0.7.0-r8","draft":true}]]`
+					want = []string{"gh", "api", "--paginate", "--slurp", "repos/tuxcrate/zrepl/releases?per_page=100", "--include"}
+					stdout = "[HTTP/2.0 200 OK\r\nX-Github-Request-Id: PAGE1\r\n\r\n" + `[{"tag_name":"v0.7.0-r3","draft":true}],` + "HTTP/2.0 200 OK\r\nX-Github-Request-Id: PAGE2\r\n\r\n" + `[{"tag_name":"v0.7.0-r8","draft":true}]]`
 				case 3:
 					want = []string{"git", "tag", "--list"}
 					stdout = "v0.7.0-r1"

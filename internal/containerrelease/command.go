@@ -38,13 +38,13 @@ func (a app) run(input string, args ...string) (string, error) {
 	return result.stdout, nil
 }
 
-// Bound logged output while retaining the start of HTTP responses, including
-// their status, request ID, rate-limit headers, and error body. Never log stdin:
-// it can contain a request payload rather than diagnostic information.
+// Bound logged output while retaining both the first response and the final
+// failure when a paginated request fails after successful pages. Never log
+// stdin: it can contain a request payload rather than diagnostic information.
 func commandDiagnostic(output string) string {
 	const limit = 8 * 1024
 	if len(output) > limit {
-		return output[:limit] + "\n[truncated]"
+		return output[:limit/2] + "\n[truncated]\n" + output[len(output)-limit/2:]
 	}
 	if output == "" {
 		return "[empty]"
