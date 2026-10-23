@@ -223,8 +223,10 @@ func (a app) reserve() error {
 		return err
 	}
 	// Reserve before exposing named tags. Retain failed drafts, never reuse them.
-	if _, err := a.run(string(payload), "gh", "api", "--method", "POST", "repos/"+repository+"/releases", "--input", "-"); err != nil {
-		return err
+	// Include response headers for failure diagnostics, without HTTP debug logging
+	// (which would also capture request headers and the request payload).
+	if _, err := a.run(string(payload), "gh", "api", "--method", "POST", "repos/"+repository+"/releases", "--input", "-", "--include"); err != nil {
+		return fmt.Errorf("reserve draft release %s: %w\nThe POST may have created a draft despite the failure. Inspect releases before rerunning; retain any reserved drafts", tag, err)
 	}
 	if err := a.output("tag", tag); err != nil {
 		return err

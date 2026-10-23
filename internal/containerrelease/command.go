@@ -29,7 +29,25 @@ func (a app) run(input string, args ...string) (string, error) {
 		return "", fmt.Errorf("run %s: %w", strings.Join(args, " "), err)
 	}
 	if result.code != 0 {
-		return "", fmt.Errorf("command failed (%d): %s\n%s", result.code, strings.Join(args, " "), result.stderr)
+		diagnostics := "stderr:\n" + commandDiagnostic(result.stderr)
+		if result.stdout != "" {
+			diagnostics += "\nstdout:\n" + commandDiagnostic(result.stdout)
+		}
+		return "", fmt.Errorf("command failed (%d): %s\n%s", result.code, strings.Join(args, " "), diagnostics)
 	}
 	return result.stdout, nil
+}
+
+// Bound logged output while retaining the start of HTTP responses, including
+// their status, request ID, rate-limit headers, and error body. Never log stdin:
+// it can contain a request payload rather than diagnostic information.
+func commandDiagnostic(output string) string {
+	const limit = 8 * 1024
+	if len(output) > limit {
+		return output[:limit] + "\n[truncated]"
+	}
+	if output == "" {
+		return "[empty]"
+	}
+	return output
 }

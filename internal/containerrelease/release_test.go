@@ -208,7 +208,7 @@ func TestReservation(t *testing.T) {
 				case 5:
 					want = []string{"git", "log", "--reverse", "--format=%H%x09%s", "HEAD"}
 				case 6:
-					want = []string{"gh", "api", "--method", "POST", "repos/tuxcrate/zrepl/releases", "--input", "-"}
+					want = []string{"gh", "api", "--method", "POST", "repos/tuxcrate/zrepl/releases", "--input", "-", "--include"}
 					var payload map[string]any
 					if err := json.Unmarshal([]byte(input), &payload); err != nil {
 						t.Fatal(err)
@@ -235,7 +235,7 @@ func TestReservation(t *testing.T) {
 					return commandResult{code: 1, stderr: "not found"}, nil
 				}
 				if calls == 6 && fail {
-					return commandResult{code: 1, stderr: "API unavailable"}, nil
+					return commandResult{code: 1, stderr: "unexpected end of JSON input", stdout: "HTTP/2.0 502 Bad Gateway\nX-Github-Request-Id: TEST:1234\n\nupstream unavailable"}, nil
 				}
 				return commandResult{stdout: stdout}, nil
 			}
@@ -245,6 +245,11 @@ func TestReservation(t *testing.T) {
 				t.Fatalf("calls %d: %v", calls, err)
 			}
 			if fail {
+				for _, want := range []string{"reserve draft release v0.7.0-r9", "unexpected end of JSON input", "HTTP/2.0 502 Bad Gateway", "X-Github-Request-Id: TEST:1234", "upstream unavailable", "Inspect releases before rerunning"} {
+					if !strings.Contains(err.Error(), want) {
+						t.Errorf("missing %q in %v", want, err)
+					}
+				}
 				if _, err := os.Stat(env["GITHUB_OUTPUT"]); !os.IsNotExist(err) {
 					t.Fatal("failed reservation exposed outputs")
 				}
