@@ -137,6 +137,63 @@ func TestWorkflowPRAssignment(t *testing.T) {
 	}
 }
 
+func TestWorkflowPRAggregateCheck(t *testing.T) {
+	data, err := os.ReadFile("../../.github/workflows/container.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Other jobs use scalar needs; decode only the aggregate job below.
+	var document struct {
+		Jobs map[string]yaml.Node `yaml:"jobs"`
+	}
+	if err := yaml.Unmarshal(data, &document); err != nil {
+		t.Fatal(err)
+	}
+	var job struct {
+		Name        string            `yaml:"name"`
+		If          string            `yaml:"if"`
+		Needs       []string          `yaml:"needs"`
+		Permissions map[string]string `yaml:"permissions"`
+		Strategy    any               `yaml:"strategy"`
+		Steps       []struct {
+			If   string            `yaml:"if"`
+			Uses string            `yaml:"uses"`
+			Run  string            `yaml:"run"`
+			Env  map[string]string `yaml:"env"`
+		} `yaml:"steps"`
+	}
+	node := document.Jobs["pull-request-check"]
+	if err := node.Decode(&job); err != nil {
+		t.Fatal(err)
+	}
+	if job.Name != "" || job.Strategy != nil {
+		t.Fatal("aggregate must retain its fixed job name without a matrix")
+	}
+	if strings.Join(job.Needs, ",") != "plan,pull-request" || job.If != "always() && github.event_name == 'pull_request'" {
+		t.Fatal("aggregate must run on every PR even when planning or matrix builds fail or are skipped")
+	}
+	if job.Permissions == nil || len(job.Permissions) != 0 || len(job.Steps) != 1 {
+		t.Fatal("aggregate must use no token permissions and a single validation step")
+	}
+	step := job.Steps[0]
+	if step.If != "" || step.Uses != "" || step.Env["PLAN_RESULT"] != "${{ needs.plan.result }}" || step.Env["BUILD_RESULT"] != "${{ needs.pull-request.result }}" {
+		t.Fatal("aggregate must check both dependency results without checking out PR code")
+	}
+	for _, plan := range []string{"success", "failure", "cancelled", "skipped", ""} {
+		for _, build := range []string{"success", "failure", "cancelled", "skipped", ""} {
+			t.Run("plan="+plan+"/build="+build, func(t *testing.T) {
+				cmd := exec.Command("bash", "-e", "-o", "pipefail", "-c", step.Run)
+				cmd.Env = append(os.Environ(), "PLAN_RESULT="+plan, "BUILD_RESULT="+build)
+				out, err := cmd.CombinedOutput()
+				wantSuccess := plan == "success" && build == "success"
+				if (err == nil) != wantSuccess {
+					t.Fatalf("aggregate success = %v, want %v: %s", err == nil, wantSuccess, out)
+				}
+			})
+		}
+	}
+}
+
 func TestWorkflowPRImages(t *testing.T) {
 	data, err := os.ReadFile("../../.github/workflows/container.yml")
 	if err != nil {
