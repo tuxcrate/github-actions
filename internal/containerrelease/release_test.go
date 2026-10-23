@@ -113,7 +113,7 @@ func TestCurrentCommit(t *testing.T) {
 	for _, head := range []string{"old", strings.Repeat("b", 40)} {
 		a, env := testApp(t)
 		a.exec = func(_ string, args ...string) (commandResult, error) {
-			want := []string{"gh", "api", "repos/tuxcrate/zrepl/git/ref/heads/main", "--jq", ".object.sha"}
+			want := []string{"gh", "api", "repos/tuxcrate/zrepl/git/ref/heads/main", "--jq", ".object.sha", "--include"}
 			if !reflect.DeepEqual(args, want) {
 				t.Fatal(args)
 			}
@@ -195,11 +195,11 @@ func TestReservation(t *testing.T) {
 				var stdout string
 				switch calls {
 				case 1:
-					want = []string{"gh", "api", "repos/tuxcrate/zrepl/git/ref/heads/main", "--jq", ".object.sha"}
-					stdout = env["GITHUB_SHA"]
+					want = []string{"gh", "api", "repos/tuxcrate/zrepl/git/ref/heads/main", "--jq", ".object.sha", "--include"}
+					stdout = "HTTP/2.0 200 OK\r\nX-Github-Request-Id: HEAD\r\n\r\n" + env["GITHUB_SHA"]
 				case 2:
-					want = []string{"gh", "api", "--paginate", "--slurp", "repos/tuxcrate/zrepl/releases?per_page=100"}
-					stdout = `[[{"tag_name":"v0.7.0-r3","draft":true}],[{"tag_name":"v0.7.0-r8","draft":true}]]`
+					want = []string{"gh", "api", "--paginate", "--slurp", "repos/tuxcrate/zrepl/releases?per_page=100", "--include"}
+					stdout = "[HTTP/2.0 200 OK\r\nX-Github-Request-Id: PAGE1\r\n\r\n" + `[{"tag_name":"v0.7.0-r3","draft":true}],` + "HTTP/2.0 200 OK\r\nX-Github-Request-Id: PAGE2\r\n\r\n" + `[{"tag_name":"v0.7.0-r8","draft":true}]]`
 				case 3:
 					want = []string{"git", "tag", "--list"}
 					stdout = "v0.7.0-r1"
@@ -208,7 +208,7 @@ func TestReservation(t *testing.T) {
 				case 5:
 					want = []string{"git", "log", "--reverse", "--format=%H%x09%s", "HEAD"}
 				case 6:
-					want = []string{"gh", "api", "--method", "POST", "repos/tuxcrate/zrepl/releases", "--input", "-"}
+					want = []string{"gh", "api", "--method", "POST", "repos/tuxcrate/zrepl/releases", "--input", "-", "--include"}
 					var payload map[string]any
 					if err := json.Unmarshal([]byte(input), &payload); err != nil {
 						t.Fatal(err)
@@ -235,7 +235,7 @@ func TestReservation(t *testing.T) {
 					return commandResult{code: 1, stderr: "not found"}, nil
 				}
 				if calls == 6 && fail {
-					return commandResult{code: 1, stderr: "API unavailable"}, nil
+					return commandResult{code: 1, stderr: "unexpected end of JSON input", stdout: "HTTP/2.0 502 Bad Gateway\nX-Github-Request-Id: TEST:1234\n\nupstream unavailable"}, nil
 				}
 				return commandResult{stdout: stdout}, nil
 			}
@@ -245,6 +245,11 @@ func TestReservation(t *testing.T) {
 				t.Fatalf("calls %d: %v", calls, err)
 			}
 			if fail {
+				for _, want := range []string{"reserve draft release v0.7.0-r9", "unexpected end of JSON input", "HTTP/2.0 502 Bad Gateway", "X-Github-Request-Id: TEST:1234", "upstream unavailable", "Inspect releases before rerunning"} {
+					if !strings.Contains(err.Error(), want) {
+						t.Errorf("missing %q in %v", want, err)
+					}
+				}
 				if _, err := os.Stat(env["GITHUB_OUTPUT"]); !os.IsNotExist(err) {
 					t.Fatal("failed reservation exposed outputs")
 				}
