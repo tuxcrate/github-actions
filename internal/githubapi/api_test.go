@@ -1,7 +1,8 @@
-package containerrelease
+package githubapi
 
 import (
 	"encoding/json"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -25,15 +26,15 @@ func TestGitHubAPISuccess(t *testing.T) {
 		{"no headers", []string{"repos/owner/repo"}, `{"id":1}`, `{"id":1}`},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			a := app{exec: func(input string, args ...string) (commandResult, error) {
+			run := func(input string, args ...string) (string, error) {
 				want := append([]string{"gh", "api"}, tt.args...)
 				want = append(want, "--include")
 				if input != "request payload" || !reflect.DeepEqual(args, want) {
 					t.Fatalf("unexpected command: %q %v", input, args)
 				}
-				return commandResult{stdout: tt.response}, nil
-			}}
-			got, err := a.githubAPI("request payload", tt.args...)
+				return tt.response, nil
+			}
+			got, err := Call(run, "request payload", tt.args...)
 			if err != nil || got != tt.want {
 				t.Fatalf("got %q, %v; want %q", got, err, tt.want)
 			}
@@ -48,10 +49,10 @@ func TestGitHubAPIPreservesJSONStrings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a := app{exec: func(_ string, _ ...string) (commandResult, error) {
-		return commandResult{stdout: "HTTP/2.0 200 OK\n\n" + string(body)}, nil
-	}}
-	got, err := a.githubAPI("", "repos/owner/repo/releases")
+	run := func(_ string, _ ...string) (string, error) {
+		return "HTTP/2.0 200 OK\n\n" + string(body), nil
+	}
+	got, err := Call(run, "", "repos/owner/repo/releases")
 	if err != nil || got != string(body) {
 		t.Fatalf("got %q, %v; want %q", got, err, body)
 	}
@@ -61,37 +62,22 @@ func TestGitHubAPIFailure(t *testing.T) {
 	for _, method := range []string{"GET", "POST", "PATCH", "PUT", "DELETE"} {
 		t.Run(method, func(t *testing.T) {
 			calls := 0
-			a := app{exec: func(_ string, _ ...string) (commandResult, error) {
+			failure := errors.New("HTTP/2.0 503 Service Unavailable\nX-Github-Request-Id: TEST\nRetry-After: 60\n\nupstream unavailable")
+			run := func(input string, args ...string) (string, error) {
 				calls++
-				return commandResult{code: 1, stderr: "gh: API unavailable", stdout: "HTTP/2.0 503 Service Unavailable\nX-Github-Request-Id: TEST\nRetry-After: 60\n\nupstream unavailable"}, nil
-			}}
-			_, err := a.githubAPI("private payload", "--method", method, "repos/owner/repo/releases")
-			if err == nil {
-				t.Fatal("expected failure")
-			}
-			for _, want := range []string{"--method " + method, "HTTP/2.0 503 Service Unavailable", "X-Github-Request-Id: TEST", "Retry-After: 60", "upstream unavailable", "gh: API unavailable"} {
-				if !strings.Contains(err.Error(), want) {
-					t.Errorf("missing %q in %v", want, err)
+				want := []string{"gh", "api", "--method", method, "repos/owner/repo/releases", "--include"}
+				if input != "private payload" || !reflect.DeepEqual(args, want) {
+					t.Fatal("unexpected command")
 				}
+				return "partial response", failure
+			}
+			got, err := Call(run, "private payload", "--method", method, "repos/owner/repo/releases")
+			if got != "" || !errors.Is(err, failure) {
+				t.Fatalf("got %q, %v; want original diagnostic error", got, err)
 			}
 			if calls != 1 || strings.Contains(err.Error(), "private payload") {
 				t.Fatal("request retried or payload logged")
 			}
 		})
-	}
-}
-
-func TestGitHubAPIPaginatedFailure(t *testing.T) {
-	a := app{exec: func(_ string, _ ...string) (commandResult, error) {
-		return commandResult{code: 1, stderr: "gh: API unavailable", stdout: "[HTTP/2.0 200 OK\nX-Github-Request-Id: PAGE1\n\n" + strings.Repeat("x", 10000) + ",HTTP/2.0 503 Service Unavailable\nX-Github-Request-Id: PAGE2\n\nupstream unavailable"}, nil
-	}}
-	_, err := a.githubAPI("", "--paginate", "--slurp", "repos/owner/repo/releases")
-	if err == nil {
-		t.Fatal("expected failure")
-	}
-	for _, want := range []string{"X-Github-Request-Id: PAGE1", "[truncated]", "HTTP/2.0 503 Service Unavailable", "X-Github-Request-Id: PAGE2", "upstream unavailable"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("missing %q in diagnostic", want)
-		}
 	}
 }

@@ -4,6 +4,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/tuxcrate/github-actions/internal/githubapi"
 )
 
 func TestRunDiagnostics(t *testing.T) {
@@ -51,5 +53,20 @@ func TestRunSuccess(t *testing.T) {
 	got, err := a.run("", "gh", "api")
 	if err != nil || got != "response" {
 		t.Fatalf("got %q, %v", got, err)
+	}
+}
+
+func TestGitHubAPIPaginatedFailure(t *testing.T) {
+	a := app{exec: func(_ string, _ ...string) (commandResult, error) {
+		return commandResult{code: 1, stderr: "gh: API unavailable", stdout: "[HTTP/2.0 200 OK\nX-Github-Request-Id: PAGE1\n\n" + strings.Repeat("x", 10000) + ",HTTP/2.0 503 Service Unavailable\nX-Github-Request-Id: PAGE2\n\nupstream unavailable"}, nil
+	}}
+	_, err := githubapi.Call(a.run, "", "--paginate", "--slurp", "repos/owner/repo/releases")
+	if err == nil {
+		t.Fatal("expected failure")
+	}
+	for _, want := range []string{"X-Github-Request-Id: PAGE1", "[truncated]", "HTTP/2.0 503 Service Unavailable", "X-Github-Request-Id: PAGE2", "upstream unavailable"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("missing %q in diagnostic", want)
+		}
 	}
 }

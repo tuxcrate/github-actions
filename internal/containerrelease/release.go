@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/tuxcrate/github-actions/internal/githubapi"
 	"github.com/tuxcrate/github-actions/internal/releaseconfig"
 	releaseversion "github.com/tuxcrate/github-actions/internal/version"
 )
@@ -59,7 +60,7 @@ func (a app) assertTagAvailable(image, tag string) error {
 }
 
 func (a app) assertCurrentCommit() error {
-	head, err := a.githubAPI("", "repos/"+a.getenv("GITHUB_REPOSITORY")+"/git/ref/heads/"+a.getenv("GITHUB_REF_NAME"), "--jq", ".object.sha")
+	head, err := githubapi.Call(a.run, "", "repos/"+a.getenv("GITHUB_REPOSITORY")+"/git/ref/heads/"+a.getenv("GITHUB_REF_NAME"), "--jq", ".object.sha")
 	if err != nil {
 		return err
 	}
@@ -168,7 +169,7 @@ func (a app) reserve() error {
 		return errors.New("build did not return a valid image digest")
 	}
 	repository := a.getenv("GITHUB_REPOSITORY")
-	data, err := a.githubAPI("", "--paginate", "--slurp", "repos/"+repository+"/releases?per_page=100")
+	data, err := githubapi.Call(a.run, "", "--paginate", "--slurp", "repos/"+repository+"/releases?per_page=100")
 	if err != nil {
 		return err
 	}
@@ -223,7 +224,7 @@ func (a app) reserve() error {
 		return err
 	}
 	// Reserve before exposing named tags. Retain failed drafts, never reuse them.
-	if _, err := a.githubAPI(string(payload), "--method", "POST", "repos/"+repository+"/releases", "--input", "-"); err != nil {
+	if _, err := githubapi.Call(a.run, string(payload), "--method", "POST", "repos/"+repository+"/releases", "--input", "-"); err != nil {
 		return fmt.Errorf("reserve draft release %s: %w\nThe POST may have created a draft despite the failure. Inspect releases before rerunning; retain any reserved drafts", tag, err)
 	}
 	if err := a.output("tag", tag); err != nil {
