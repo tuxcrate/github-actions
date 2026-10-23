@@ -262,6 +262,25 @@ jobs:
             gh api --method POST "$comments" -f body="$body" --silent
           fi
 
+  # Branch protection requires this fixed check, not dynamic matrix job names.
+  # Superseded prerelease tracks are intentionally absent from the build matrix.
+  pull-request-check:
+    needs: [plan, pull-request]
+    if: always() && github.event_name == 'pull_request'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Require planning and all active track builds to succeed
+        env:
+          PLAN_RESULT: ${{ needs.plan.result }}
+          BUILD_RESULT: ${{ needs.pull-request.result }}
+        run: |
+          if [[ "$PLAN_RESULT" != success || "$BUILD_RESULT" != success ]]; then
+            echo "::error::Container PR validation failed: plan=$PLAN_RESULT, builds=$BUILD_RESULT"
+            exit 1
+          fi
+
   release:
     name: release (${{ matrix.track }})
     needs: plan
