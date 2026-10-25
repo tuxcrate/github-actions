@@ -81,6 +81,82 @@ func TestWorkflowRequiresRootMetadata(t *testing.T) {
 	}
 }
 
+func TestWorkflowDocsNotification(t *testing.T) {
+	data, err := os.ReadFile("../../.github/workflows/container.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var workflow struct {
+		On struct {
+			Call struct {
+				Inputs map[string]struct {
+					Default string `yaml:"default"`
+				} `yaml:"inputs"`
+				Secrets map[string]struct {
+					Required bool `yaml:"required"`
+				} `yaml:"secrets"`
+			} `yaml:"workflow_call"`
+		} `yaml:"on"`
+		Jobs map[string]struct {
+			If          string            `yaml:"if"`
+			Needs       any               `yaml:"needs"`
+			Permissions map[string]string `yaml:"permissions"`
+			Steps       []struct {
+				ContinueOnError bool              `yaml:"continue-on-error"`
+				Env             map[string]string `yaml:"env"`
+				Run             string            `yaml:"run"`
+			} `yaml:"steps"`
+		} `yaml:"jobs"`
+	}
+	if err := yaml.Unmarshal(data, &workflow); err != nil {
+		t.Fatal(err)
+	}
+	if workflow.On.Call.Inputs["shared-ref"].Default != "main" || workflow.On.Call.Inputs["docs-repository"].Default != "tuxcrate/docs" {
+		t.Fatal("callers using main must not need explicit shared-ref or docs-repository inputs")
+	}
+	for _, name := range []string{"DOCS_TOKEN", "docs-token"} {
+		secret, ok := workflow.On.Call.Secrets[name]
+		if !ok || secret.Required {
+			t.Fatalf("%s must remain optional for inherited and legacy callers", name)
+		}
+	}
+	job := workflow.Jobs["notify-docs"]
+	if job.Needs != "release" || job.If != "needs.release.result == 'success' && inputs.docs-repository != ''" || len(job.Permissions) != 0 {
+		t.Fatal("docs notifications must run only after successful releases, allow opting out, and need no GITHUB_TOKEN permissions")
+	}
+	if len(job.Steps) != 1 || !job.Steps[0].ContinueOnError {
+		t.Fatal("notification failure must not fail a completed release")
+	}
+	step := job.Steps[0]
+	if step.Env["GH_TOKEN"] != "${{ secrets.docs-token || secrets.DOCS_TOKEN }}" || step.Env["DOCS_REPOSITORY"] != "${{ inputs.docs-repository }}" {
+		t.Fatal("notification must support the explicit legacy token and inherited DOCS_TOKEN")
+	}
+	for _, token := range []string{"", "test-token"} {
+		t.Run(fmt.Sprintf("token-present=%t", token != ""), func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, "gh"), []byte("#!/bin/bash\nprintf '%s\\n' \"$@\" > \"$GH_REQUEST\"\n"), 0755); err != nil {
+				t.Fatal(err)
+			}
+			request := filepath.Join(dir, "request")
+			cmd := exec.Command("bash", "-e", "-o", "pipefail", "-c", step.Run)
+			cmd.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"), "GH_REQUEST="+request,
+				"GH_TOKEN="+token, "DOCS_REPOSITORY=tuxcrate/docs")
+			output, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("notification failed: %v\n%s", err, output)
+			}
+			args, err := os.ReadFile(request)
+			if token == "" {
+				if !os.IsNotExist(err) || !strings.Contains(string(output), "::warning::Docs refresh skipped:") {
+					t.Fatal("missing token must warn without sending a dispatch")
+				}
+			} else if err != nil || string(args) != "api\n--method\nPOST\nrepos/tuxcrate/docs/dispatches\n-f\nevent_type=image-published\n" {
+				t.Fatalf("unexpected docs dispatch: %q, %v", args, err)
+			}
+		})
+	}
+}
+
 func TestWorkflowPRAssignment(t *testing.T) {
 	data, err := os.ReadFile("../../.github/workflows/container.yml")
 	if err != nil {
