@@ -8,12 +8,15 @@ on:
         default: main
         type: string
       docs-repository:
-        description: Optional owner/repo to notify after publication (requires docs-token)
-        default: ''
+        description: Owner/repo to notify after publication (requires DOCS_TOKEN); set empty to disable
+        default: tuxcrate/docs
         type: string
     secrets:
-      docs-token:
+      DOCS_TOKEN:
         description: Optional GitHub App or fine-grained token with contents write access to the docs repository
+        required: false
+      docs-token:
+        description: Legacy explicit token mapping; prefer inheriting DOCS_TOKEN
         required: false
 
 permissions:
@@ -416,12 +419,12 @@ jobs:
         # missed notification without allocating another image revision.
         continue-on-error: true
         env:
-          GH_TOKEN: ${{ secrets.docs-token }}
+          GH_TOKEN: ${{ secrets.docs-token || secrets.DOCS_TOKEN }}
           DOCS_REPOSITORY: ${{ inputs.docs-repository }}
         run: |
           set -euo pipefail
           if [[ -z "$GH_TOKEN" ]]; then
-            echo '::warning::Docs refresh skipped: configure the DOCS_TOKEN secret in the caller repository.'
+            echo '::warning::Docs refresh skipped: make DOCS_TOKEN available to the caller and forward it with secrets: inherit or an explicit mapping.'
             exit 0
           fi
           [[ "$DOCS_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]
