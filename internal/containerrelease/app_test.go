@@ -19,6 +19,7 @@ func TestExecute(t *testing.T) {
 		{"metadata", []string{"metadata"}, "app-version must be"},
 		{"reserve", []string{"reserve"}, "invalid release track name"},
 		{"plan", []string{"plan"}, "configuration requires 1–256 tracks"},
+		{"release-plan", []string{"release-plan"}, "configuration requires 1–256 tracks"},
 		{"manifest", []string{"manifest"}, "app-version must be"},
 		{"check-manifest", []string{"check-manifest"}, "a local image is required"},
 	} {

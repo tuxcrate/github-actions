@@ -289,16 +289,50 @@ jobs:
             exit 1
           fi
 
-  release:
-    name: release (${{ matrix.track }})
+  release-plan:
     needs: plan
-    strategy:
-      fail-fast: false
-      max-parallel: 1
-      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     if: >-
       github.ref == format('refs/heads/{0}', github.event.repository.default_branch) &&
       (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      changed: ${{ steps.plan.outputs.changed }}
+    steps:
+      - name: Check out container sources and release history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          path: source
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check out shared release tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: tuxcrate/github-actions
+          ref: ${{ inputs.shared-ref }}
+          path: shared
+          persist-credentials: false
+      - name: Build release tooling
+        run: go build -C shared -o "$RUNNER_TEMP/container-release" ./cmd/container-release
+      - name: Select tracks changed since their last published release
+        id: plan
+        working-directory: source
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: '"$RUNNER_TEMP/container-release" release-plan'
+
+  release:
+    name: release (${{ matrix.track }})
+    needs: release-plan
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix: ${{ fromJSON(needs.release-plan.outputs.matrix) }}
+    if: >-
+      github.ref == format('refs/heads/{0}', github.event.repository.default_branch) &&
+      (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') &&
+      needs.release-plan.outputs.changed == 'true'
     runs-on: ubuntu-26.04
     timeout-minutes: 90
     permissions:

@@ -21,11 +21,13 @@ func (a app) execute(args []string) error {
 			return a.reserve()
 		case "plan":
 			return a.plan()
+		case "release-plan":
+			return a.releasePlan()
 		case "manifest":
 			return a.manifest()
 		case "check-manifest":
 			return a.checkManifest()
 		}
 	}
-	return errors.New("usage: container-release {plan|metadata|reserve|manifest|check-manifest}")
+	return errors.New("usage: container-release {plan|release-plan|metadata|reserve|manifest|check-manifest}")
 }

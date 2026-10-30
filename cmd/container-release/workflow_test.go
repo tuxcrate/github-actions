@@ -81,6 +81,78 @@ func TestWorkflowRequiresRootMetadata(t *testing.T) {
 	}
 }
 
+func TestWorkflowReleaseChangeDetection(t *testing.T) {
+	data, err := os.ReadFile("../../.github/workflows/container.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var workflow struct {
+		Jobs map[string]struct {
+			If       string            `yaml:"if"`
+			Needs    any               `yaml:"needs"`
+			Outputs  map[string]string `yaml:"outputs"`
+			Strategy struct {
+				Matrix string `yaml:"matrix"`
+			} `yaml:"strategy"`
+			Steps []struct {
+				ID               string            `yaml:"id"`
+				Uses             string            `yaml:"uses"`
+				Run              string            `yaml:"run"`
+				WorkingDirectory string            `yaml:"working-directory"`
+				With             map[string]string `yaml:"with"`
+				Env              map[string]string `yaml:"env"`
+			} `yaml:"steps"`
+		} `yaml:"jobs"`
+	}
+	if err := yaml.Unmarshal(data, &workflow); err != nil {
+		t.Fatal(err)
+	}
+	plan, release := workflow.Jobs["release-plan"], workflow.Jobs["release"]
+	if plan.Needs != "plan" || release.Needs != "release-plan" {
+		t.Fatal("production builds must wait for metadata validation and release change detection")
+	}
+	for _, gate := range []string{
+		"github.ref == format('refs/heads/{0}', github.event.repository.default_branch)",
+		"github.event_name == 'push'", "github.event_name == 'schedule'", "github.event_name == 'workflow_dispatch'",
+	} {
+		if !strings.Contains(plan.If, gate) || !strings.Contains(release.If, gate) {
+			t.Fatalf("release planning and publishing must retain gate %s", gate)
+		}
+	}
+	if !strings.Contains(release.If, "needs.release-plan.outputs.changed == 'true'") ||
+		release.Strategy.Matrix != "${{ fromJSON(needs.release-plan.outputs.matrix) }}" {
+		t.Fatal("an empty release plan must skip the job before expanding its matrix")
+	}
+	if plan.Outputs["matrix"] != "${{ steps.plan.outputs.matrix }}" || plan.Outputs["changed"] != "${{ steps.plan.outputs.changed }}" {
+		t.Fatal("release plan must expose its filtered matrix and nonempty flag")
+	}
+	var checkedOut, planned bool
+	for _, step := range plan.Steps {
+		if step.With["path"] == "source" {
+			checkedOut = true
+			if step.With["fetch-depth"] != "0" || step.With["persist-credentials"] != "false" {
+				t.Fatal("change detection needs complete caller history without persisted credentials")
+			}
+		}
+		if step.ID == "plan" {
+			planned = true
+			if !checkedOut || step.WorkingDirectory != "source" || step.Env["GH_TOKEN"] != "${{ secrets.GITHUB_TOKEN }}" || step.Run != `"$RUNNER_TEMP/container-release" release-plan` {
+				t.Fatal("release planning must use trusted tooling, caller sources, and the caller token")
+			}
+		}
+	}
+	if !planned {
+		t.Fatal("missing release planning command")
+	}
+	pr := workflow.Jobs["pull-request"]
+	if pr.Needs != "plan" || pr.Strategy.Matrix != "${{ fromJSON(needs.plan.outputs.matrix) }}" {
+		t.Fatal("PRs must keep the unfiltered metadata matrix, not release change detection")
+	}
+	if notify := workflow.Jobs["notify-docs"]; notify.Needs != "release" || !strings.Contains(notify.If, "needs.release.result == 'success'") {
+		t.Fatal("no-op pushes must not notify docs when the release job is skipped")
+	}
+}
+
 func TestWorkflowDocsNotification(t *testing.T) {
 	data, err := os.ReadFile("../../.github/workflows/container.yml")
 	if err != nil {
