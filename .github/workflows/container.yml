@@ -124,14 +124,20 @@ jobs:
             echo "$image:$tag-$COMMIT_SHA"
             echo 'PR_IMAGE_TAGS'
           } >> "$GITHUB_OUTPUT"
-      - name: Log in to GHCR for PR images
-        if: env.PUBLISH_PR == 'true'
-        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4
+      - name: Check out shared test and validation tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build all platforms and publish eligible PR images
+          repository: tuxcrate/github-actions
+          ref: ${{ inputs.shared-ref }}
+          path: .tuxcrate-release-tooling
+          persist-credentials: false
+      - name: Build artifact tooling
+        run: go build -C .tuxcrate-release-tooling -o "$RUNNER_TEMP/container-artifact" ./cmd/container-artifact
+      - name: Install OCI image tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends skopeo
+      - name: Build all platforms into a local OCI archive
         id: build
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
@@ -142,8 +148,7 @@ jobs:
             ${{ matrix.build-args }}
             BUILDKIT_DOCKERFILE_CHECK=skip=InvalidDefaultArgInFrom
           pull: true
-          push: ${{ env.PUBLISH_PR == 'true' }}
-          tags: ${{ steps.preview.outputs.tags }}
+          outputs: type=oci,dest=${{ runner.temp }}/container-${{ matrix.track }}.tar
           secrets: |
             github_token=${{ github.event.pull_request.head.repo.full_name == github.repository && secrets.GITHUB_TOKEN || '' }}
           # Preserve ownership even when a rerun leaves an older index untagged.
@@ -161,31 +166,13 @@ jobs:
           no-cache: true
           cache-from: type=gha,scope=container-pr-${{ github.event.pull_request.number }}-${{ matrix.track }}
           cache-to: type=gha,mode=max,scope=container-pr-${{ github.event.pull_request.number }}-${{ matrix.track }}
-      - name: Load first platform for OS metadata validation
-        id: local-image
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
-        with:
-          context: ${{ matrix.context }}
-          file: ${{ matrix.containerfile }}
-          platforms: ${{ steps.preview.outputs.platform }}
-          build-args: |
-            ${{ matrix.build-args }}
-            BUILDKIT_DOCKERFILE_CHECK=skip=InvalidDefaultArgInFrom
-          load: true
-          tags: tuxcrate-pr-os-check:${{ matrix.track }}
-          secrets: |
-            github_token=${{ github.event.pull_request.head.repo.full_name == github.repository && secrets.GITHUB_TOKEN || '' }}
-          provenance: false
-          sbom: false
-          # Reuse the just-built layers, including for fork PRs that cannot push.
-          cache-from: type=gha,scope=container-pr-${{ github.event.pull_request.number }}-${{ matrix.track }}
-      - name: Check out shared OS validation tooling
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          repository: tuxcrate/github-actions
-          ref: ${{ inputs.shared-ref }}
-          path: .tuxcrate-release-tooling
-          persist-credentials: false
+      - name: Test every platform from the built archive
+        id: tested
+        env:
+          PLATFORMS: ${{ matrix.platforms }}
+          APP_VERSION: ${{ matrix.version }}
+          TRACK: ${{ matrix.track }}
+        run: '"$RUNNER_TEMP/container-artifact" test "$RUNNER_TEMP/container-$TRACK.tar" "$PLATFORMS" "$APP_VERSION"'
       - name: Generate and validate synthetic release metadata
         env:
           APP_VERSION: ${{ matrix.version }}
@@ -194,17 +181,35 @@ jobs:
           TAGS: ${{ matrix.tags }}
           PRERELEASE: ${{ matrix.prerelease }}
           IMAGE: ${{ matrix.image }}
-          # This is a local image ID, not a published multiarch digest. The
-          # generated manifest is only a validation fixture, never a release.
-          IMAGE_DIGEST: ${{ steps.local-image.outputs.imageid }}
+          # The OCI digest is real, but this metadata is only a local fixture.
+          IMAGE_DIGEST: ${{ steps.tested.outputs.digest }}
           PLATFORMS: ${{ matrix.platforms }}
-          LOCAL_IMAGE: tuxcrate-pr-os-check:${{ matrix.track }}
+          LOCAL_IMAGE: ${{ steps.tested.outputs.image }}
         run: |
           set -euo pipefail
           go build -C .tuxcrate-release-tooling -o "$RUNNER_TEMP/container-release" ./cmd/container-release
           mkdir -p "$RUNNER_TEMP/pr-release-metadata"
           cd "$RUNNER_TEMP/pr-release-metadata"
           "$RUNNER_TEMP/container-release" check-manifest
+      - name: Log in to GHCR after successful tests
+        if: env.PUBLISH_PR == 'true'
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Upload the tested artifact and publish PR tags
+        if: env.PUBLISH_PR == 'true'
+        env:
+          IMAGE: ${{ steps.preview.outputs.image }}
+          IMAGE_DIGEST: ${{ steps.tested.outputs.digest }}
+          IMAGE_TAGS: ${{ steps.preview.outputs.tags }}
+          TRACK: ${{ matrix.track }}
+        run: |
+          "$RUNNER_TEMP/container-artifact" publish "$RUNNER_TEMP/container-$TRACK.tar" "$IMAGE"
+          while IFS= read -r tag; do
+            docker buildx imagetools create --tag "$tag" "$IMAGE@$IMAGE_DIGEST"
+          done <<< "$IMAGE_TAGS"
       - name: Comment PR image pull instructions
         if: env.PUBLISH_PR == 'true'
         env:
@@ -212,7 +217,7 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           TRACK: ${{ matrix.track }}
           IMAGE: ${{ steps.preview.outputs.image }}
-          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+          IMAGE_DIGEST: ${{ steps.tested.outputs.digest }}
           COMMIT_SHA: ${{ github.sha }}
           PLATFORMS: ${{ matrix.platforms }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -247,7 +252,7 @@ jobs:
           <details>
           <summary>Synthetic release.json (validation only)</summary>
 
-          Generated to validate release metadata. Revision \`r0\` and the local image ID are placeholders, not a published release revision or multiarch digest.
+          Generated to validate release metadata. Revision \`r0\` is a placeholder, not a published release revision; the digest identifies the tested multiarch artifact.
 
           \`\`\`json
           $release_json
@@ -318,7 +323,9 @@ jobs:
           path: shared
           persist-credentials: false
       - name: Build release tooling
-        run: go build -C ../shared -o "$RUNNER_TEMP/container-release" ./cmd/container-release
+        run: |
+          go build -C ../shared -o "$RUNNER_TEMP/container-release" ./cmd/container-release
+          go build -C ../shared -o "$RUNNER_TEMP/container-artifact" ./cmd/container-artifact
       - name: Validate release metadata
         id: metadata
         env:
@@ -329,13 +336,11 @@ jobs:
         uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4
       - name: Set up Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
-      - name: Log in to GHCR
-        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Rebuild and publish multiarch image by digest
+      - name: Install OCI image tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends skopeo
+      - name: Build all platforms into a local OCI archive
         id: build
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
@@ -349,7 +354,7 @@ jobs:
           # must actually install the currently available security updates.
           pull: true
           no-cache: true
-          outputs: type=image,name=${{ steps.metadata.outputs.image }},push-by-digest=true,name-canonical=true,push=true
+          outputs: type=oci,dest=${{ runner.temp }}/container-${{ matrix.track }}.tar
           secrets: |
             github_token=${{ secrets.GITHUB_TOKEN }}
           provenance: mode=max
@@ -359,6 +364,39 @@ jobs:
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.version=${{ matrix.image-version }}
           cache-to: type=gha,mode=max,scope=container-${{ matrix.track }}
+      - name: Test every platform from the built archive
+        id: tested
+        env:
+          PLATFORMS: ${{ matrix.platforms }}
+          APP_VERSION: ${{ matrix.version }}
+          TRACK: ${{ matrix.track }}
+        run: '"$RUNNER_TEMP/container-artifact" test "$RUNNER_TEMP/container-$TRACK.tar" "$PLATFORMS" "$APP_VERSION"'
+      - name: Validate final image OS metadata before upload
+        env:
+          APP_VERSION: ${{ matrix.version }}
+          IMAGE_VERSION: ${{ matrix.image-version }}
+          TRACK: ${{ matrix.track }}
+          TAGS: ${{ matrix.tags }}
+          PRERELEASE: ${{ matrix.prerelease }}
+          IMAGE: ${{ matrix.image }}
+          IMAGE_DIGEST: ${{ steps.tested.outputs.digest }}
+          PLATFORMS: ${{ matrix.platforms }}
+          LOCAL_IMAGE: ${{ steps.tested.outputs.image }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/release-validation"
+          cd "$RUNNER_TEMP/release-validation"
+          "$RUNNER_TEMP/container-release" check-manifest
+      - name: Log in to GHCR after successful tests
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Upload the tested multiarch artifact by digest
+        env:
+          IMAGE: ${{ steps.metadata.outputs.image }}
+          TRACK: ${{ matrix.track }}
+        run: '"$RUNNER_TEMP/container-artifact" publish "$RUNNER_TEMP/container-$TRACK.tar" "$IMAGE"'
       - name: Reserve revision and create draft release
         id: release
         env:
@@ -369,7 +407,7 @@ jobs:
           TAGS: ${{ matrix.tags }}
           PRERELEASE: ${{ matrix.prerelease }}
           IMAGE: ${{ steps.metadata.outputs.image }}
-          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+          IMAGE_DIGEST: ${{ steps.tested.outputs.digest }}
           PLATFORMS: ${{ matrix.platforms }}
         run: '"$RUNNER_TEMP/container-release" reserve'
       - name: Attach machine-readable release metadata
@@ -381,7 +419,7 @@ jobs:
           TAGS: ${{ matrix.tags }}
           PRERELEASE: ${{ matrix.prerelease }}
           IMAGE: ${{ steps.metadata.outputs.image }}
-          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+          IMAGE_DIGEST: ${{ steps.tested.outputs.digest }}
           PLATFORMS: ${{ matrix.platforms }}
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
         run: |
@@ -391,7 +429,7 @@ jobs:
       - name: Publish revision tag and moving aliases
         env:
           IMAGE: ${{ steps.metadata.outputs.image }}
-          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+          IMAGE_DIGEST: ${{ steps.tested.outputs.digest }}
           IMAGE_TAGS: ${{ steps.release.outputs.tags }}
         run: |
           set -euo pipefail
