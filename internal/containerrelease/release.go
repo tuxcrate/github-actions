@@ -19,10 +19,7 @@ var missingRE = regexp.MustCompile(`(?i)not found|manifest unknown|name_unknown`
 func (a app) previousRelease(releases []release) (string, error) {
 	var candidates []release
 	for _, r := range releases {
-		track := a.trackName()
-		marker := "<!-- tuxcrate-track:" + track + " -->"
-		matchesTrack := strings.HasSuffix(strings.TrimSpace(r.Body), marker) || (track == "stable" && !r.Prerelease && !strings.Contains(r.Body, "<!-- tuxcrate-track:"))
-		if !r.Draft && matchesTrack && releaseversion.IsReleaseTag(r.TagName) {
+		if publishedForTrack(r, a.trackName()) {
 			candidates = append(candidates, r)
 		}
 	}
