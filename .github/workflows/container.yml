@@ -131,6 +131,8 @@ jobs:
           ref: ${{ inputs.shared-ref }}
           path: .tuxcrate-release-tooling
           persist-credentials: false
+      - name: Build artifact tooling
+        run: go build -C .tuxcrate-release-tooling -o "$RUNNER_TEMP/container-artifact" ./cmd/container-artifact
       - name: Install OCI image tooling
         run: |
           sudo apt-get update
@@ -170,7 +172,7 @@ jobs:
           PLATFORMS: ${{ matrix.platforms }}
           APP_VERSION: ${{ matrix.version }}
           TRACK: ${{ matrix.track }}
-        run: bash .tuxcrate-release-tooling/scripts/container-artifact.sh test "$RUNNER_TEMP/container-$TRACK.tar" "$PLATFORMS" "$APP_VERSION"
+        run: '"$RUNNER_TEMP/container-artifact" test "$RUNNER_TEMP/container-$TRACK.tar" "$PLATFORMS" "$APP_VERSION"'
       - name: Generate and validate synthetic release metadata
         env:
           APP_VERSION: ${{ matrix.version }}
@@ -204,7 +206,7 @@ jobs:
           IMAGE_TAGS: ${{ steps.preview.outputs.tags }}
           TRACK: ${{ matrix.track }}
         run: |
-          bash .tuxcrate-release-tooling/scripts/container-artifact.sh publish "$RUNNER_TEMP/container-$TRACK.tar" "$IMAGE"
+          "$RUNNER_TEMP/container-artifact" publish "$RUNNER_TEMP/container-$TRACK.tar" "$IMAGE"
           while IFS= read -r tag; do
             docker buildx imagetools create --tag "$tag" "$IMAGE@$IMAGE_DIGEST"
           done <<< "$IMAGE_TAGS"
@@ -321,7 +323,9 @@ jobs:
           path: shared
           persist-credentials: false
       - name: Build release tooling
-        run: go build -C ../shared -o "$RUNNER_TEMP/container-release" ./cmd/container-release
+        run: |
+          go build -C ../shared -o "$RUNNER_TEMP/container-release" ./cmd/container-release
+          go build -C ../shared -o "$RUNNER_TEMP/container-artifact" ./cmd/container-artifact
       - name: Validate release metadata
         id: metadata
         env:
@@ -366,7 +370,7 @@ jobs:
           PLATFORMS: ${{ matrix.platforms }}
           APP_VERSION: ${{ matrix.version }}
           TRACK: ${{ matrix.track }}
-        run: bash ../shared/scripts/container-artifact.sh test "$RUNNER_TEMP/container-$TRACK.tar" "$PLATFORMS" "$APP_VERSION"
+        run: '"$RUNNER_TEMP/container-artifact" test "$RUNNER_TEMP/container-$TRACK.tar" "$PLATFORMS" "$APP_VERSION"'
       - name: Validate final image OS metadata before upload
         env:
           APP_VERSION: ${{ matrix.version }}
@@ -392,7 +396,7 @@ jobs:
         env:
           IMAGE: ${{ steps.metadata.outputs.image }}
           TRACK: ${{ matrix.track }}
-        run: bash ../shared/scripts/container-artifact.sh publish "$RUNNER_TEMP/container-$TRACK.tar" "$IMAGE"
+        run: '"$RUNNER_TEMP/container-artifact" publish "$RUNNER_TEMP/container-$TRACK.tar" "$IMAGE"'
       - name: Reserve revision and create draft release
         id: release
         env:

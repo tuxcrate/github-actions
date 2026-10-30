@@ -339,7 +339,7 @@ func TestWorkflowPRImages(t *testing.T) {
 			}
 		case s.ID == "tested":
 			tested = true
-			if !built || !tooling || loggedIn || s.If != "" || !strings.Contains(s.Run, "container-artifact.sh test") || s.Env["PLATFORMS"] != "${{ matrix.platforms }}" || s.Env["APP_VERSION"] != "${{ matrix.version }}" {
+			if !built || !tooling || loggedIn || s.If != "" || !strings.Contains(s.Run, `container-artifact" test`) || s.Env["PLATFORMS"] != "${{ matrix.platforms }}" || s.Env["APP_VERSION"] != "${{ matrix.version }}" {
 				t.Fatal("all PRs, including forks, must test every built platform before registry login")
 			}
 		case s.Name == "Check out shared test and validation tooling":
@@ -379,7 +379,7 @@ func TestWorkflowPRImages(t *testing.T) {
 			if !loggedIn || !validated || !tested || s.If != "env.PUBLISH_PR == 'true'" || s.Env["IMAGE"] != "${{ steps.preview.outputs.image }}" || s.Env["IMAGE_TAGS"] != "${{ steps.preview.outputs.tags }}" || s.Env["IMAGE_DIGEST"] != "${{ steps.tested.outputs.digest }}" {
 				t.Fatal("only tested, validated same-repository artifacts may publish preview tags")
 			}
-			if !strings.Contains(s.Run, "container-artifact.sh publish") || !strings.Contains(s.Run, `docker buildx imagetools create --tag "$tag" "$IMAGE@$IMAGE_DIGEST"`) {
+			if !strings.Contains(s.Run, `container-artifact" publish`) || !strings.Contains(s.Run, `docker buildx imagetools create --tag "$tag" "$IMAGE@$IMAGE_DIGEST"`) {
 				t.Fatal("preview tags must refer to the unchanged tested archive")
 			}
 		case s.Name == "Comment PR image pull instructions":
