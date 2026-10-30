@@ -303,7 +303,7 @@ func TestWorkflowPRImages(t *testing.T) {
 	if pr.Env["PUBLISH_PR"] != gate {
 		t.Fatal("publishing must exclude fork PRs")
 	}
-	var prepared, loggedIn, built, loaded, tooling, validated, commented bool
+	var prepared, loggedIn, built, tested, tooling, validated, uploaded, commented bool
 	for _, s := range pr.Steps {
 		switch {
 		case s.ID == "preview":
@@ -334,25 +334,22 @@ func TestWorkflowPRImages(t *testing.T) {
 			}
 		case strings.HasPrefix(s.Uses, "docker/login-action@"):
 			loggedIn = true
-			if !prepared || s.If != "env.PUBLISH_PR == 'true'" || s.With["password"] != "${{ secrets.GITHUB_TOKEN }}" {
-				t.Fatal("registry login must be gated and use only GITHUB_TOKEN")
+			if !prepared || !tested || !validated || s.If != "env.PUBLISH_PR == 'true'" || s.With["password"] != "${{ secrets.GITHUB_TOKEN }}" {
+				t.Fatal("registry login must follow tests and metadata validation, be gated, and use only GITHUB_TOKEN")
 			}
-		case s.Name == "Load first platform for OS metadata validation":
-			loaded = true
-			if !built || s.If != "" || !strings.HasPrefix(s.Uses, "docker/build-push-action@") || s.With["load"] != "true" || s.With["platforms"] != "${{ steps.preview.outputs.platform }}" || s.With["tags"] != "tuxcrate-pr-os-check:${{ matrix.track }}" {
-				t.Fatal("all PRs, including forks, must load the first platform for validation")
+		case s.ID == "tested":
+			tested = true
+			if !built || !tooling || loggedIn || s.If != "" || !strings.Contains(s.Run, "container-artifact.sh test") || s.Env["PLATFORMS"] != "${{ matrix.platforms }}" || s.Env["APP_VERSION"] != "${{ matrix.version }}" {
+				t.Fatal("all PRs, including forks, must test every built platform before registry login")
 			}
-			if s.With["context"] != "${{ matrix.context }}" || s.With["file"] != "${{ matrix.containerfile }}" || !strings.Contains(s.With["build-args"], "${{ matrix.build-args }}") || s.With["push"] != "" {
-				t.Fatal("validation must build the same source and arguments without pushing")
-			}
-		case s.Name == "Check out shared OS validation tooling":
+		case s.Name == "Check out shared test and validation tooling":
 			tooling = true
-			if !loaded || s.If != "" || s.With["repository"] != "tuxcrate/github-actions" || s.With["ref"] != "${{ inputs.shared-ref }}" || s.With["persist-credentials"] != "false" {
-				t.Fatal("validation tooling must be checked out after the image build without credentials")
+			if s.If != "" || s.With["repository"] != "tuxcrate/github-actions" || s.With["ref"] != "${{ inputs.shared-ref }}" || s.With["persist-credentials"] != "false" {
+				t.Fatal("test and validation tooling must be checked out without credentials")
 			}
 		case s.Name == "Generate and validate synthetic release metadata":
 			validated = true
-			if !tooling || s.If != "" || !strings.Contains(s.Run, `"$RUNNER_TEMP/container-release" check-manifest`) || !strings.Contains(s.Run, `cd "$RUNNER_TEMP/pr-release-metadata"`) {
+			if !tooling || !tested || s.If != "" || !strings.Contains(s.Run, `"$RUNNER_TEMP/container-release" check-manifest`) || !strings.Contains(s.Run, `cd "$RUNNER_TEMP/pr-release-metadata"`) {
 				t.Fatal("all PRs must generate and validate a temporary release.json")
 			}
 			for key, want := range map[string]string{
@@ -361,9 +358,9 @@ func TestWorkflowPRImages(t *testing.T) {
 				"IMAGE_VERSION": "${{ matrix.image-version }}",
 				"TAGS":          "${{ matrix.tags }}",
 				"IMAGE":         "${{ matrix.image }}",
-				"IMAGE_DIGEST":  "${{ steps.local-image.outputs.imageid }}",
+				"IMAGE_DIGEST":  "${{ steps.tested.outputs.digest }}",
 				"PLATFORMS":     "${{ matrix.platforms }}",
-				"LOCAL_IMAGE":   "tuxcrate-pr-os-check:${{ matrix.track }}",
+				"LOCAL_IMAGE":   "${{ steps.tested.outputs.image }}",
 			} {
 				if s.Env[key] != want {
 					t.Fatalf("validation environment %s: got %q, want %q", key, s.Env[key], want)
@@ -371,15 +368,23 @@ func TestWorkflowPRImages(t *testing.T) {
 			}
 		case strings.HasPrefix(s.Uses, "docker/build-push-action@"):
 			built = true
-			if !loggedIn || s.ID != "build" || s.With["push"] != "${{ env.PUBLISH_PR == 'true' }}" || s.With["tags"] != "${{ steps.preview.outputs.tags }}" {
-				t.Fatal("only eligible PRs may push, and only to preview tags")
+			if loggedIn || s.ID != "build" || s.With["push"] != "" || s.With["tags"] != "" || !strings.HasPrefix(s.With["outputs"], "type=oci,") {
+				t.Fatal("PR builds must export a local OCI archive without registry login or upload")
 			}
 			if s.With["no-cache"] != "true" || s.With["platforms"] != "${{ matrix.platforms }}" || s.With["provenance"] != "mode=max" || s.With["sbom"] != "true" {
 				t.Fatal("PR builds must keep uncached multiarch validation and attestations")
 			}
+		case s.Name == "Upload the tested artifact and publish PR tags":
+			uploaded = true
+			if !loggedIn || !validated || !tested || s.If != "env.PUBLISH_PR == 'true'" || s.Env["IMAGE"] != "${{ steps.preview.outputs.image }}" || s.Env["IMAGE_TAGS"] != "${{ steps.preview.outputs.tags }}" || s.Env["IMAGE_DIGEST"] != "${{ steps.tested.outputs.digest }}" {
+				t.Fatal("only tested, validated same-repository artifacts may publish preview tags")
+			}
+			if !strings.Contains(s.Run, "container-artifact.sh publish") || !strings.Contains(s.Run, `docker buildx imagetools create --tag "$tag" "$IMAGE@$IMAGE_DIGEST"`) {
+				t.Fatal("preview tags must refer to the unchanged tested archive")
+			}
 		case s.Name == "Comment PR image pull instructions":
 			commented = true
-			if !built || !validated || s.If != "env.PUBLISH_PR == 'true'" {
+			if !built || !validated || !uploaded || s.If != "env.PUBLISH_PR == 'true'" {
 				t.Fatal("comments must follow successful eligible PR image builds")
 			}
 			for key, want := range map[string]string{
@@ -387,7 +392,7 @@ func TestWorkflowPRImages(t *testing.T) {
 				"PR_NUMBER":    "${{ github.event.pull_request.number }}",
 				"TRACK":        "${{ matrix.track }}",
 				"IMAGE":        "${{ steps.preview.outputs.image }}",
-				"IMAGE_DIGEST": "${{ steps.build.outputs.digest }}",
+				"IMAGE_DIGEST": "${{ steps.tested.outputs.digest }}",
 				"COMMIT_SHA":   "${{ github.sha }}",
 				"PLATFORMS":    "${{ matrix.platforms }}",
 				"RUN_URL":      "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
@@ -399,8 +404,8 @@ func TestWorkflowPRImages(t *testing.T) {
 			testPRImageComment(t, s.Run)
 		}
 	}
-	if !prepared || !loggedIn || !built || !loaded || !tooling || !validated || !commented {
-		t.Fatal("missing PR tag preparation, conditional login, build, OS validation, or comment")
+	if !prepared || !loggedIn || !built || !tested || !tooling || !validated || !uploaded || !commented {
+		t.Fatal("missing PR tag preparation, build, tests, validation, conditional login, upload, or comment")
 	}
 	if !strings.Contains(workflow.Jobs["release"].If, "github.ref == format('refs/heads/{0}', github.event.repository.default_branch)") || strings.Contains(workflow.Jobs["release"].If, "pull_request") {
 		t.Fatal("PRs must not enter the production release job")
@@ -549,7 +554,7 @@ fi
 					}
 				}
 				spoiler := "<details>\n<summary>Synthetic release.json (validation only)</summary>"
-				if !strings.Contains(string(request), spoiler) || !strings.Contains(string(request), "```json\n"+manifest+"\n```\n\n</details>") || !strings.Contains(string(request), "Revision `r0` and the local image ID are placeholders") {
+				if !strings.Contains(string(request), spoiler) || !strings.Contains(string(request), "```json\n"+manifest+"\n```\n\n</details>") || !strings.Contains(string(request), "Revision `r0` is a placeholder") {
 					t.Fatalf("comment must include the generated manifest in a collapsed, clearly labeled section: %s", request)
 				}
 			})
