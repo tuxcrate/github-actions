@@ -70,7 +70,9 @@ fi
 set -eu
 case "$1 $2" in
     'image inspect')
-        if [[ ${WRONG_PLATFORM:-} == true ]]; then
+        if [[ $4 == '{{json .Config.Labels}}' ]]; then
+            printf '%s\n' "${IMAGE_LABELS:-null}"
+        elif [[ ${WRONG_PLATFORM:-} == true ]]; then
             echo linux/386
         elif [[ ${!#} == *-1 ]]; then
             echo linux/arm64
@@ -78,8 +80,28 @@ case "$1 $2" in
             echo linux/amd64
         fi
         ;;
+    'run --rm')
+        test "$3" = --pull=never
+        test "$4" = --platform
+        test "$6" = --network
+        test "$7" = none
+        test "$8" = --label
+        [[ $9 == com.tuxcrate.smoke-test=* ]]
+        test "${10}" = --entrypoint
+        test "${11}" = /bin/sh
+        [[ ${12} == tuxcrate-test:* ]]
+        test "${13}" = -eu
+        test "${14}" = -c
+        echo "user:$5" >> "$FIXTURE/events"
+        if [[ ${FAIL_USER_PLATFORM:-} == "$5" ]]; then exit 24; fi
+        printf '%s\n' "${RUNTIME_IDENTITY:-1000:1000:tuxcrate:tuxcrate}"
+        ;;
     'image rm') echo "remove:${!#}" >> "$FIXTURE/events" ;;
-    'ps -aq') echo leaked-test-container ;;
+    'ps -aq')
+        [[ $4 == label=com.tuxcrate.smoke-test=* ]]
+        echo "query:$*" >> "$FIXTURE/events"
+        echo leaked-test-container
+        ;;
     'rm --force') echo "cleanup:$*" >> "$FIXTURE/events" ;;
     *) echo "Unexpected docker command: $*" >&2; exit 1 ;;
 esac
@@ -137,8 +159,17 @@ func TestBuildTestPublishArtifact(t *testing.T) {
 	if first < 0 || second <= first || strings.Contains(events, "publish:") {
 		t.Fatalf("unexpected test order: %s", events)
 	}
+	for _, platform := range []string{"linux/amd64", "linux/arm64"} {
+		user, hook := strings.Index(events, "user:"+platform), strings.Index(events, "hook:"+platform)
+		if user < 0 || hook <= user {
+			t.Fatalf("runtime user must be checked before each platform hook: %s", events)
+		}
+	}
 	if !strings.Contains(events, "cleanup:rm --force --volumes leaked-test-container") {
 		t.Fatalf("missing container cleanup: %s", events)
+	}
+	if strings.Count(events, "query:ps -aq --filter label=com.tuxcrate.smoke-test=") != 2 {
+		t.Fatalf("expected one com.tuxcrate cleanup query per platform: %s", events)
 	}
 	output, err := os.ReadFile(filepath.Join(f.dir, "output"))
 	if err != nil {
@@ -162,6 +193,9 @@ func TestFailedTestsNeverAuthorizeUpload(t *testing.T) {
 		{"first platform", "FAIL_PLATFORM=linux/amd64", "exit status 23"},
 		{"second platform", "FAIL_PLATFORM=linux/arm64", "exit status 23"},
 		{"wrong loaded architecture", "WRONG_PLATFORM=true", "Loaded linux/386"},
+		{"first platform user command", "FAIL_USER_PLATFORM=linux/amd64", "exit status 24"},
+		{"second platform user command", "FAIL_USER_PLATFORM=linux/arm64", "exit status 24"},
+		{"wrong runtime user", "RUNTIME_IDENTITY=1000:1000:tuxcreate:tuxcreate", "expected 1000:1000:tuxcrate:tuxcrate"},
 		{"modified during tests", "MUTATE_ARCHIVE=true", "changed during testing"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -236,6 +270,61 @@ func TestMissingHookCompatibility(t *testing.T) {
 	}
 	if output, err := f.run(t, "test", f.archive, "linux/amd64,linux/arm64", "1.2.3"); err != nil || strings.Count(output, "No tests/smoke.sh") != 2 {
 		t.Fatalf("%v\n%s", err, output)
+	}
+	if events := f.events(t); strings.Count(events, "user:") != 2 || strings.Contains(events, "hook:") {
+		t.Fatalf("missing hooks must not skip runtime-user validation: %s", events)
+	}
+}
+
+func TestRuntimeUserPolicy(t *testing.T) {
+	for _, tt := range []struct {
+		name, labels, identity string
+		wantError              bool
+	}{
+		{"default", "null", "1000:1000:tuxcrate:tuxcrate", false},
+		{"explicit tuxcrate", `{"com.tuxcrate.runtime-user":"tuxcrate"}`, "1000:1000:tuxcrate:tuxcrate", false},
+		{"declared root", `{"com.tuxcrate.runtime-user":"root"}`, "0:0:root:root", false},
+		{"undeclared root", "null", "0:0:root:root", true},
+		{"wrong uid", "null", "1001:1000:tuxcrate:tuxcrate", true},
+		{"wrong gid", "null", "1000:1001:tuxcrate:tuxcrate", true},
+		{"wrong username", "null", "1000:1000:app:tuxcrate", true},
+		{"wrong group name", "null", "1000:1000:tuxcrate:app", true},
+		{"root label with nonroot user", `{"com.tuxcrate.runtime-user":"root"}`, "1000:1000:tuxcrate:tuxcrate", true},
+		{"unknown policy", `{"com.tuxcrate.runtime-user":"skip"}`, "0:0:root:root", true},
+		{"invalid labels", "invalid JSON", "1000:1000:tuxcrate:tuxcrate", true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newFixture(t)
+			f.env = append(f.env, "IMAGE_LABELS="+tt.labels, "RUNTIME_IDENTITY="+tt.identity)
+			f.write(t, "image.tar.tested", "stale receipt")
+			output, err := f.run(t, "test", f.archive, "linux/amd64,linux/arm64", "1.2.3")
+			if (err != nil) != tt.wantError {
+				t.Fatalf("unexpected result: %v\n%s", err, output)
+			}
+			if tt.wantError {
+				if _, err := os.Stat(f.archive + ".tested"); !os.IsNotExist(err) {
+					t.Fatal("invalid runtime user retained a publication receipt")
+				}
+				if strings.Contains(f.events(t), "hook:") {
+					t.Fatal("invalid runtime user reached the application hook")
+				}
+			}
+		})
+	}
+}
+
+// Opt in with locally loaded images to exercise the real Docker runtime check.
+func TestRuntimeUserDockerIntegration(t *testing.T) {
+	images := os.Getenv("TUXCRATE_RUNTIME_USER_TEST_IMAGES")
+	if images == "" {
+		t.Skip("set TUXCRATE_RUNTIME_USER_TEST_IMAGES to comma-separated local image references")
+	}
+	for _, image := range strings.Split(images, ",") {
+		t.Run(image, func(t *testing.T) {
+			if err := (app{os.Stdout, os.Stderr}).checkRuntimeUser(context.Background(), image, "linux/amd64", "runtime-user-integration"); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }
 
