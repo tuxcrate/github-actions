@@ -209,8 +209,19 @@ func (a app) reserve() error {
 		return err
 	}
 	// Reserve before exposing named tags. Retain failed drafts, never reuse them.
-	if _, err := githubapi.Call(a.run, string(payload), "--method", "POST", "repos/"+repository+"/releases", "--input", "-"); err != nil {
+	data, err = githubapi.Call(a.run, string(payload), "--method", "POST", "repos/"+repository+"/releases", "--input", "-")
+	if err != nil {
 		return fmt.Errorf("reserve draft release %s: %w\nThe POST may have created a draft despite the failure. Inspect releases before rerunning; retain any reserved drafts", tag, err)
+	}
+	var draft release
+	if err := json.Unmarshal([]byte(data), &draft); err != nil {
+		return fmt.Errorf("decode reserved draft %s: %w; retain any reserved drafts and inspect releases before rerunning", tag, err)
+	}
+	if draft.ID <= 0 || draft.TagName != tag || !draft.Draft || draft.TargetCommitish != a.getenv("GITHUB_SHA") || draft.Prerelease != a.isPrerelease() || !strings.Contains(draft.Body, "<!-- tuxcrate-track:"+track+" -->") {
+		return fmt.Errorf("invalid reservation response for %s; retain any reserved drafts and inspect releases before rerunning", tag)
+	}
+	if err := a.output("release-id", strconv.FormatInt(draft.ID, 10)); err != nil {
+		return err
 	}
 	if err := a.output("tag", tag); err != nil {
 		return err
@@ -261,8 +272,14 @@ func (a app) finalize() error {
 	if !releaseconfig.ValidDigest(digest) {
 		return errors.New("build did not return a valid image digest")
 	}
+	releaseID := a.getenv("RELEASE_ID")
+	id, err := strconv.ParseInt(releaseID, 10, 64)
+	if err != nil || id <= 0 || strconv.FormatInt(id, 10) != releaseID {
+		return errors.New("invalid or missing reserved release ID")
+	}
 	repository := a.getenv("GITHUB_REPOSITORY")
-	data, err := githubapi.Call(a.run, "", "repos/"+repository+"/releases/tags/"+tag)
+	// GitHub's get-by-tag endpoint excludes drafts. Use the ID returned by POST.
+	data, err := githubapi.Call(a.run, "", "repos/"+repository+"/releases/"+releaseID)
 	if err != nil {
 		return err
 	}
@@ -271,7 +288,7 @@ func (a app) finalize() error {
 		return fmt.Errorf("decode reserved release: %w", err)
 	}
 	marker := "<!-- tuxcrate-track:" + a.trackName() + " -->"
-	if draft.ID <= 0 || !draft.Draft || draft.TagName != tag || draft.TargetCommitish != a.getenv("GITHUB_SHA") || draft.Prerelease != a.isPrerelease() || !strings.Contains(draft.Body, marker) {
+	if draft.ID != id || !draft.Draft || draft.TagName != tag || draft.TargetCommitish != a.getenv("GITHUB_SHA") || draft.Prerelease != a.isPrerelease() || !strings.Contains(draft.Body, marker) {
 		return errors.New("refusing to finalize a release that is not this build's reserved draft")
 	}
 	// Recheck after the build; never overwrite a revision published elsewhere.

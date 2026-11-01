@@ -177,6 +177,18 @@ jobs:
           TRACK: ${{ matrix.track }}
           PACKAGE_VERSION: ${{ steps.preview.outputs.package-version }}
         run: '"$RUNNER_TEMP/container-artifact" test "$RUNNER_TEMP/container-$TRACK.tar" "$PLATFORMS" "$APP_VERSION"'
+      - name: Rehearse production release lifecycle without publishing
+        env:
+          APP_VERSION: ${{ matrix.version }}
+          IMAGE_VERSION: ${{ matrix.image-version }}
+          TRACK: ${{ matrix.track }}
+          TAGS: ${{ matrix.tags }}
+          PRERELEASE: ${{ matrix.prerelease }}
+          IMAGE: ${{ matrix.image }}
+          IMAGE_DIGEST: ${{ steps.tested.outputs.digest }}
+          PLATFORMS: ${{ matrix.platforms }}
+          LOCAL_IMAGE: ${{ steps.tested.outputs.image }}
+        run: go test -C .tuxcrate-release-tooling -count=1 -run '^TestReleaseLifecycle$' ./internal/containerrelease
       - name: Generate and validate synthetic release metadata
         env:
           APP_VERSION: ${{ matrix.version }}
@@ -460,6 +472,7 @@ jobs:
           IMAGE_DIGEST: ${{ steps.tested.outputs.digest }}
           PLATFORMS: ${{ matrix.platforms }}
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          RELEASE_ID: ${{ steps.release.outputs.release-id }}
         run: '"$RUNNER_TEMP/container-release" finalize'
       - name: Attach machine-readable release metadata
         env:

@@ -28,7 +28,7 @@ func TestWorkflowPackageVersionAndRevisionLabels(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, job := range []string{"pull-request", "release"} {
-		reserve, build, test, upload, finalize, manifest, tags := -1, -1, -1, -1, -1, -1, -1
+		reserve, build, test, rehearsal, upload, finalize, manifest, tags := -1, -1, -1, -1, -1, -1, -1, -1
 		packageVersion := "${{ steps.release.outputs.package-version }}"
 		if job == "pull-request" {
 			packageVersion = "${{ steps.preview.outputs.package-version }}"
@@ -60,10 +60,16 @@ func TestWorkflowPackageVersionAndRevisionLabels(t *testing.T) {
 			if strings.Contains(s.Run, `container-artifact" publish`) {
 				upload = i
 			}
+			if strings.Contains(s.Run, "-run '^TestReleaseLifecycle$'") {
+				rehearsal = i
+				if s.Env["LOCAL_IMAGE"] != "${{ steps.tested.outputs.image }}" || s.Env["IMAGE_DIGEST"] != "${{ steps.tested.outputs.digest }}" {
+					t.Fatal("PR release rehearsal must use the tested artifact")
+				}
+			}
 			if strings.Contains(s.Run, `container-release" finalize`) {
 				finalize = i
-				if s.Env["RELEASE_TAG"] != "${{ steps.release.outputs.tag }}" || s.Env["IMAGE_DIGEST"] != "${{ steps.tested.outputs.digest }}" {
-					t.Fatal("finalization must use the reserved tag and tested digest")
+				if s.Env["RELEASE_TAG"] != "${{ steps.release.outputs.tag }}" || s.Env["RELEASE_ID"] != "${{ steps.release.outputs.release-id }}" || s.Env["IMAGE_DIGEST"] != "${{ steps.tested.outputs.digest }}" {
+					t.Fatal("finalization must use the reserved release ID, tag, and tested digest")
 				}
 			}
 			if strings.Contains(s.Run, `container-release" manifest`) {
@@ -77,6 +83,9 @@ func TestWorkflowPackageVersionAndRevisionLabels(t *testing.T) {
 			t.Fatalf("%s is missing builds or tests", job)
 		}
 		if job == "pull-request" {
+			if !(test < rehearsal && rehearsal < upload) {
+				t.Fatal("PRs must rehearse production finalization after image tests and before upload")
+			}
 			if reserve != -1 || finalize != -1 {
 				t.Fatal("PRs must never reserve or finalize production revisions")
 			}

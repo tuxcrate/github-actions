@@ -175,7 +175,7 @@ func TestPrereleaseReservation(t *testing.T) {
 			if payload["prerelease"] != true || !strings.Contains(payload["body"].(string), "<!-- tuxcrate-track:preview -->") {
 				t.Fatal(payload)
 			}
-			return commandResult{}, nil
+			return commandResult{stdout: reservedReleaseResponse(t, input)}, nil
 		default:
 			t.Fatalf("unexpected command %v", args)
 			return commandResult{}, nil

@@ -26,6 +26,20 @@ func testApp(t *testing.T) (app, map[string]string) {
 	return app{exec: execCommand, getenv: func(key string) string { return env[key] }}, env
 }
 
+func reservedReleaseResponse(t *testing.T, input string) string {
+	t.Helper()
+	var response map[string]any
+	if err := json.Unmarshal([]byte(input), &response); err != nil {
+		t.Fatal(err)
+	}
+	response["id"] = 42
+	data, err := json.Marshal(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
+}
+
 func stubReleaseOS(t *testing.T, a *app, env map[string]string) {
 	t.Helper()
 	var calls []string
@@ -74,7 +88,7 @@ func TestNumericPrereleaseReservation(t *testing.T) {
 				t.Fatal(payload)
 			}
 			posted = true
-			return commandResult{}, nil
+			return commandResult{stdout: reservedReleaseResponse(t, input)}, nil
 		default:
 			t.Fatalf("unexpected command %v", args)
 			return commandResult{}, nil
@@ -220,6 +234,7 @@ func TestReservation(t *testing.T) {
 					if _, err := os.Stat(env["GITHUB_OUTPUT"]); !os.IsNotExist(err) {
 						t.Fatal("outputs written before reservation")
 					}
+					stdout = reservedReleaseResponse(t, input)
 				default:
 					t.Fatalf("unexpected command: %v", args)
 				}
@@ -250,7 +265,7 @@ func TestReservation(t *testing.T) {
 				return
 			}
 			data, err := os.ReadFile(env["GITHUB_OUTPUT"])
-			if err != nil || !strings.Contains(string(data), "tag<<TUXCRATE_OUTPUT\nv0.7.0-r9\n") || !strings.Contains(string(data), "0.7.0-r9\n0.7.0\n0.7\nlatest\n") || !strings.Contains(string(data), "package-version<<TUXCRATE_OUTPUT\n0.7.0-r9\n") {
+			if err != nil || !strings.Contains(string(data), "release-id<<TUXCRATE_OUTPUT\n42\n") || !strings.Contains(string(data), "tag<<TUXCRATE_OUTPUT\nv0.7.0-r9\n") || !strings.Contains(string(data), "0.7.0-r9\n0.7.0\n0.7\nlatest\n") || !strings.Contains(string(data), "package-version<<TUXCRATE_OUTPUT\n0.7.0-r9\n") {
 				t.Fatalf("%s: %v", data, err)
 			}
 			data, err = os.ReadFile(env["GITHUB_STEP_SUMMARY"])
