@@ -42,6 +42,9 @@ func (a app) previousRelease(releases []release) (string, error) {
 }
 
 func (a app) assertTagAvailable(image, tag string) error {
+	if strings.HasPrefix(image, "ghcr.io/") && a.getenv("GH_TOKEN") != "" {
+		return ghcrTagAvailable(image, tag, a.getenv("GITHUB_ACTOR"), a.getenv("GH_TOKEN"), nil)
+	}
 	result, err := a.exec("", "docker", "buildx", "imagetools", "inspect", image+":"+tag)
 	if err != nil {
 		return err
