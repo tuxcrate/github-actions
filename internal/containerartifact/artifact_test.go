@@ -98,6 +98,7 @@ case "$1 $2" in
         ;;
     'image rm') echo "remove:${!#}" >> "$FIXTURE/events" ;;
     'ps -aq')
+        [[ $4 == label=com.tuxcrate.smoke-test=* ]]
         echo "query:$*" >> "$FIXTURE/events"
         echo leaked-test-container
         ;;
@@ -167,13 +168,8 @@ func TestBuildTestPublishArtifact(t *testing.T) {
 	if !strings.Contains(events, "cleanup:rm --force --volumes leaked-test-container") {
 		t.Fatalf("missing container cleanup: %s", events)
 	}
-	for _, prefix := range []string{"com.tuxcrate.smoke-test", "io.tuxcrate.smoke-test"} {
-		if !strings.Contains(events, "query:ps -aq --filter label="+prefix+"=") {
-			t.Fatalf("missing current or legacy label cleanup: %s", events)
-		}
-	}
-	if strings.Contains(events, "leaked-test-container leaked-test-container") {
-		t.Fatalf("cleanup must deduplicate containers found under both prefixes: %s", events)
+	if strings.Count(events, "query:ps -aq --filter label=com.tuxcrate.smoke-test=") != 2 {
+		t.Fatalf("expected one com.tuxcrate cleanup query per platform: %s", events)
 	}
 	output, err := os.ReadFile(filepath.Join(f.dir, "output"))
 	if err != nil {

@@ -148,24 +148,11 @@ func (a app) test(ctx context.Context, archive, requested, version string) (err 
 		cleanup, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
 		for _, id := range testIDs {
-			var containers []string
-			seen := make(map[string]bool)
-			// Existing repository hooks still use the previous label prefix.
-			for _, label := range []string{"com.tuxcrate.smoke-test", "io.tuxcrate.smoke-test"} {
-				output, e := a.command(cleanup, true, "docker", "ps", "-aq", "--filter", "label="+label+"="+id)
-				if e != nil {
-					fmt.Fprintln(a.stderr, e)
-					continue
-				}
-				for _, container := range strings.Fields(string(output)) {
-					if !seen[container] {
-						containers = append(containers, container)
-						seen[container] = true
-					}
-				}
-			}
-			if len(containers) > 0 {
-				a.cleanupCommand(cleanup, append([]string{"rm", "--force", "--volumes"}, containers...)...)
+			containers, e := a.command(cleanup, true, "docker", "ps", "-aq", "--filter", "label=com.tuxcrate.smoke-test="+id)
+			if e != nil {
+				fmt.Fprintln(a.stderr, e)
+			} else if ids := strings.Fields(string(containers)); len(ids) > 0 {
+				a.cleanupCommand(cleanup, append([]string{"rm", "--force", "--volumes"}, ids...)...)
 			}
 		}
 		for i, image := range images {
