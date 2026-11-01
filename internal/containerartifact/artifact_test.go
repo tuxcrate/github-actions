@@ -86,7 +86,7 @@ case "$1 $2" in
         test "$6" = --network
         test "$7" = none
         test "$8" = --label
-        [[ $9 == io.tuxcrate.smoke-test=* ]]
+        [[ $9 == com.tuxcrate.smoke-test=* ]]
         test "${10}" = --entrypoint
         test "${11}" = /bin/sh
         [[ ${12} == tuxcrate-test:* ]]
@@ -97,7 +97,10 @@ case "$1 $2" in
         printf '%s\n' "${RUNTIME_IDENTITY:-1000:1000:tuxcrate:tuxcrate}"
         ;;
     'image rm') echo "remove:${!#}" >> "$FIXTURE/events" ;;
-    'ps -aq') echo leaked-test-container ;;
+    'ps -aq')
+        echo "query:$*" >> "$FIXTURE/events"
+        echo leaked-test-container
+        ;;
     'rm --force') echo "cleanup:$*" >> "$FIXTURE/events" ;;
     *) echo "Unexpected docker command: $*" >&2; exit 1 ;;
 esac
@@ -163,6 +166,14 @@ func TestBuildTestPublishArtifact(t *testing.T) {
 	}
 	if !strings.Contains(events, "cleanup:rm --force --volumes leaked-test-container") {
 		t.Fatalf("missing container cleanup: %s", events)
+	}
+	for _, prefix := range []string{"com.tuxcrate.smoke-test", "io.tuxcrate.smoke-test"} {
+		if !strings.Contains(events, "query:ps -aq --filter label="+prefix+"=") {
+			t.Fatalf("missing current or legacy label cleanup: %s", events)
+		}
+	}
+	if strings.Contains(events, "leaked-test-container leaked-test-container") {
+		t.Fatalf("cleanup must deduplicate containers found under both prefixes: %s", events)
 	}
 	output, err := os.ReadFile(filepath.Join(f.dir, "output"))
 	if err != nil {

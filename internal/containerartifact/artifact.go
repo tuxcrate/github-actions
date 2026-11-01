@@ -148,11 +148,24 @@ func (a app) test(ctx context.Context, archive, requested, version string) (err 
 		cleanup, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
 		for _, id := range testIDs {
-			containers, e := a.command(cleanup, true, "docker", "ps", "-aq", "--filter", "label=io.tuxcrate.smoke-test="+id)
-			if e != nil {
-				fmt.Fprintln(a.stderr, e)
-			} else if ids := strings.Fields(string(containers)); len(ids) > 0 {
-				a.cleanupCommand(cleanup, append([]string{"rm", "--force", "--volumes"}, ids...)...)
+			var containers []string
+			seen := make(map[string]bool)
+			// Existing repository hooks still use the previous label prefix.
+			for _, label := range []string{"com.tuxcrate.smoke-test", "io.tuxcrate.smoke-test"} {
+				output, e := a.command(cleanup, true, "docker", "ps", "-aq", "--filter", "label="+label+"="+id)
+				if e != nil {
+					fmt.Fprintln(a.stderr, e)
+					continue
+				}
+				for _, container := range strings.Fields(string(output)) {
+					if !seen[container] {
+						containers = append(containers, container)
+						seen[container] = true
+					}
+				}
+			}
+			if len(containers) > 0 {
+				a.cleanupCommand(cleanup, append([]string{"rm", "--force", "--volumes"}, containers...)...)
 			}
 		}
 		for i, image := range images {
@@ -276,7 +289,7 @@ func (a app) checkRuntimeUser(ctx context.Context, image, platform, id string) e
 	}
 	fmt.Fprintf(a.stdout, "Checking default runtime user for %s (expected %s).\n", platform, expected)
 	actual, err := a.command(ctx, true, "docker", "run", "--rm", "--pull=never", "--platform", platform,
-		"--network", "none", "--label", "io.tuxcrate.smoke-test="+id, "--entrypoint", "/bin/sh", image,
+		"--network", "none", "--label", "com.tuxcrate.smoke-test="+id, "--entrypoint", "/bin/sh", image,
 		"-eu", "-c", `printf '%s:%s:%s:%s\n' "$(id -u)" "$(id -g)" "$(id -un)" "$(id -gn)"`)
 	if err != nil {
 		return fmt.Errorf("runtime-user check for %s: %w", platform, err)

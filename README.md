@@ -17,6 +17,9 @@ Images that require root must explicitly declare
 `0:0:root:root`; it does not skip user validation. The optional value `tuxcrate`
 declares the default explicitly; all other values fail validation.
 
+Shared test containers use `com.tuxcrate.smoke-test`. Cleanup also recognizes
+the previous `io.tuxcrate.smoke-test` prefix used by existing repository hooks.
+
 Keep directory permissions, application startup, and API checks in repository
 smoke hooks. Deploy root-user declarations before enabling the shared validator,
 and deploy the validator before removing duplicate checks from callers.
