@@ -56,8 +56,8 @@ func TestReleaseLifecycle(t *testing.T) {
 			if err := json.Unmarshal([]byte(input), &payload); err != nil {
 				t.Fatal(err)
 			}
-			if len(payload) != 1 || payload["body"] == "" {
-				t.Fatalf("finalization must only update draft notes: %v", payload)
+			if len(payload) != 2 || payload["body"] == "" || payload["tag_name"] != draft.TagName {
+				t.Fatalf("finalization must update notes and preserve the reserved tag: %v", payload)
 			}
 			draft.Body, patched = payload["body"], true
 			return commandResult{}, nil
@@ -101,7 +101,7 @@ func TestReleaseLifecycle(t *testing.T) {
 	if err := a.finalize(); err != nil {
 		t.Fatal(err)
 	}
-	if !patched || !draft.Draft || !strings.Contains(draft.Body, env["IMAGE_DIGEST"]) {
+	if !patched || !draft.Draft || draft.TagName != env["RELEASE_TAG"] || !strings.Contains(draft.Body, env["IMAGE_DIGEST"]) {
 		t.Fatalf("draft finalization was incomplete: %+v", draft)
 	}
 	if err := a.manifest(); err != nil {
