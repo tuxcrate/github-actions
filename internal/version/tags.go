@@ -75,7 +75,7 @@ func ValidateTags(imageVersion string, tags []string, prerelease bool) error {
 	}
 	seen := map[string]bool{}
 	for _, tag := range tags {
-		if !ValidImageTag(tag) || seen[tag] || releaseRE.MatchString("v"+tag) ||
+		if !ValidImageTag(tag) || seen[tag] || strings.HasPrefix(tag, "pr-") || releaseRE.MatchString("v"+tag) ||
 			(versionRE.MatchString(tag) && tag != imageVersion) {
 			return fmt.Errorf("invalid, reserved, or duplicate tag %q", tag)
 		}

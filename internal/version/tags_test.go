@@ -38,12 +38,14 @@ func TestRejectInvalidTagTemplates(t *testing.T) {
 		{"${version}", "2.0.0"}, {"${version}", "1.2.3-r0"},
 		{"${version}", "latest", "latest"}, {"${version}", ""},
 		{"${version}", "bad tag"},
+		{"${version}", "pr-12-stable"},
+		{"${version}", "pr-12-stable-" + strings.Repeat("a", 40)},
 	} {
 		if _, _, err := ResolveTags("1.2.3", tags, false); err == nil {
 			t.Errorf("accepted %v", tags)
 		}
 	}
-	for _, tag := range []string{"latest", "stable", "5", "5.0", "5.0.0.2668"} {
+	for _, tag := range []string{"latest", "stable", "5", "5.0", "5.0.0.2668", "pr-12-develop"} {
 		if _, _, err := ResolveTags("5.0.0.2668", []string{"${version}-prerelease", tag}, true); err == nil {
 			t.Errorf("accepted prerelease tag %s", tag)
 		}
