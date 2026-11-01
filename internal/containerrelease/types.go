@@ -15,11 +15,13 @@ type app struct {
 }
 
 type release struct {
-	TagName     string `json:"tag_name"`
-	Draft       bool   `json:"draft"`
-	Prerelease  bool   `json:"prerelease"`
-	PublishedAt string `json:"published_at"`
-	Body        string `json:"body"`
+	ID              int64  `json:"id"`
+	TargetCommitish string `json:"target_commitish"`
+	TagName         string `json:"tag_name"`
+	Draft           bool   `json:"draft"`
+	Prerelease      bool   `json:"prerelease"`
+	PublishedAt     string `json:"published_at"`
+	Body            string `json:"body"`
 }
 
 type releaseRequest struct {

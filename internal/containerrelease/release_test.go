@@ -70,7 +70,7 @@ func TestNumericPrereleaseReservation(t *testing.T) {
 			if err := json.Unmarshal([]byte(input), &payload); err != nil {
 				t.Fatal(err)
 			}
-			if !payload.Prerelease || payload.TagName != "v5.0.0.2668-prerelease-r3" || !strings.Contains(payload.Body, "<!-- tuxcrate-track:develop -->") || !strings.Contains(payload.Body, "Application version: `5.0.0.2668`") {
+			if !payload.Prerelease || payload.TagName != "v5.0.0.2668-prerelease-r3" || !strings.Contains(payload.Body, "<!-- tuxcrate-track:develop -->") || !strings.Contains(payload.Body, "application version `5.0.0.2668`") {
 				t.Fatal(payload)
 			}
 			posted = true
@@ -80,7 +80,6 @@ func TestNumericPrereleaseReservation(t *testing.T) {
 			return commandResult{}, nil
 		}
 	}
-	stubReleaseOS(t, &a, env)
 	if err := a.reserve(); err != nil {
 		t.Fatal(err)
 	}
@@ -188,6 +187,7 @@ func TestReservation(t *testing.T) {
 	for _, fail := range []bool{false, true} {
 		t.Run(fmtBool(fail), func(t *testing.T) {
 			a, env := testApp(t)
+			env["IMAGE_DIGEST"] = "" // Reservation precedes building the artifact.
 			calls := 0
 			a.exec = func(input string, args ...string) (commandResult, error) {
 				calls++
@@ -206,8 +206,6 @@ func TestReservation(t *testing.T) {
 				case 4:
 					want = []string{"docker", "buildx", "imagetools", "inspect", "ghcr.io/tuxcrate/zrepl:0.7.0-r9"}
 				case 5:
-					want = []string{"git", "log", "--reverse", "--format=%H%x09%s", "HEAD"}
-				case 6:
 					want = []string{"gh", "api", "--method", "POST", "repos/tuxcrate/zrepl/releases", "--input", "-", "--include"}
 					var payload map[string]any
 					if err := json.Unmarshal([]byte(input), &payload); err != nil {
@@ -216,10 +214,7 @@ func TestReservation(t *testing.T) {
 					if payload["tag_name"] != "v0.7.0-r9" || payload["draft"] != true || payload["prerelease"] != false || payload["target_commitish"] != env["GITHUB_SHA"] {
 						t.Fatal(payload)
 					}
-					if !strings.Contains(payload["body"].(string), "Scheduled security rebuild") {
-						t.Fatal(payload)
-					}
-					if !strings.Contains(payload["body"].(string), "- OS: `Debian/13.7`\n") {
+					if !strings.Contains(payload["body"].(string), "Build and publication pending.") {
 						t.Fatal(payload)
 					}
 					if _, err := os.Stat(env["GITHUB_OUTPUT"]); !os.IsNotExist(err) {
@@ -234,14 +229,13 @@ func TestReservation(t *testing.T) {
 				if calls == 4 {
 					return commandResult{code: 1, stderr: "not found"}, nil
 				}
-				if calls == 6 && fail {
+				if calls == 5 && fail {
 					return commandResult{code: 1, stderr: "unexpected end of JSON input", stdout: "HTTP/2.0 502 Bad Gateway\nX-Github-Request-Id: TEST:1234\n\nupstream unavailable"}, nil
 				}
 				return commandResult{stdout: stdout}, nil
 			}
-			stubReleaseOS(t, &a, env)
 			err := a.reserve()
-			if (err != nil) != fail || calls != 6 {
+			if (err != nil) != fail || calls != 5 {
 				t.Fatalf("calls %d: %v", calls, err)
 			}
 			if fail {
@@ -256,15 +250,15 @@ func TestReservation(t *testing.T) {
 				return
 			}
 			data, err := os.ReadFile(env["GITHUB_OUTPUT"])
-			if err != nil || !strings.Contains(string(data), "tag<<TUXCRATE_OUTPUT\nv0.7.0-r9\n") || !strings.Contains(string(data), "0.7.0-r9\n0.7.0\n0.7\nlatest\n") {
+			if err != nil || !strings.Contains(string(data), "tag<<TUXCRATE_OUTPUT\nv0.7.0-r9\n") || !strings.Contains(string(data), "0.7.0-r9\n0.7.0\n0.7\nlatest\n") || !strings.Contains(string(data), "package-version<<TUXCRATE_OUTPUT\n0.7.0-r9\n") {
 				t.Fatalf("%s: %v", data, err)
 			}
 			data, err = os.ReadFile(env["GITHUB_STEP_SUMMARY"])
 			if err != nil || !strings.HasPrefix(string(data), "# 0.7.0-r9\n") {
 				t.Fatalf("%s: %v", data, err)
 			}
-			if !strings.Contains(string(data), "- OS: `Debian/13.7`\n") {
-				t.Fatalf("missing OS metadata in summary: %s", data)
+			if !strings.Contains(string(data), "Build and publication pending.") {
+				t.Fatalf("missing reservation summary: %s", data)
 			}
 		})
 	}
