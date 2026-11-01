@@ -10,10 +10,11 @@ import (
 )
 
 func TestFinalizeReservedDraft(t *testing.T) {
-	for _, scenario := range []string{"success", "published", "wrong tag", "wrong commit", "wrong track", "wrong channel", "missing ID", "invalid JSON", "lookup failure", "occupied tag", "registry failure", "history failure", "OS failure", "PATCH failure", "stale commit", "invalid digest", "wrong image version"} {
+	for _, scenario := range []string{"success", "published", "wrong tag", "wrong commit", "wrong track", "wrong channel", "missing ID", "wrong ID", "invalid JSON", "lookup failure", "occupied tag", "registry failure", "history failure", "OS failure", "PATCH failure", "stale commit", "invalid digest", "wrong image version"} {
 		t.Run(scenario, func(t *testing.T) {
 			a, env := testApp(t)
 			env["RELEASE_TAG"] = "v0.7.0-r9"
+			env["RELEASE_ID"] = "42"
 			draft := release{ID: 42, TagName: env["RELEASE_TAG"], TargetCommitish: env["GITHUB_SHA"], Draft: true, Body: "Build pending.\n<!-- tuxcrate-track:stable -->\n"}
 			switch scenario {
 			case "published":
@@ -28,6 +29,8 @@ func TestFinalizeReservedDraft(t *testing.T) {
 				draft.Prerelease = true
 			case "missing ID":
 				draft.ID = 0
+			case "wrong ID":
+				draft.ID = 43
 			case "invalid digest":
 				env["IMAGE_DIGEST"] = "invalid"
 			case "wrong image version":
@@ -42,7 +45,7 @@ func TestFinalizeReservedDraft(t *testing.T) {
 						head = "old"
 					}
 					return commandResult{stdout: head}, nil
-				case args[0] == "gh" && args[2] == "repos/tuxcrate/zrepl/releases/tags/v0.7.0-r9":
+				case args[0] == "gh" && args[2] == "repos/tuxcrate/zrepl/releases/42":
 					if scenario == "lookup failure" {
 						return commandResult{}, errors.New("lookup failed")
 					}
@@ -129,13 +132,14 @@ func TestFinalizePrereleaseDraft(t *testing.T) {
 			env["PRERELEASE"] = "true"
 			env["TAGS"] = `["` + env["IMAGE_VERSION"] + `","preview"]`
 			env["RELEASE_TAG"] = "v" + env["IMAGE_VERSION"] + "-r3"
+			env["RELEASE_ID"] = "42"
 			draft := release{ID: 42, TagName: env["RELEASE_TAG"], TargetCommitish: env["GITHUB_SHA"], Draft: true, Prerelease: true, Body: "<!-- tuxcrate-track:prerelease -->"}
 			patched := false
 			a.exec = func(input string, args ...string) (commandResult, error) {
 				switch {
 				case args[0] == "gh" && strings.Contains(strings.Join(args, " "), "/git/ref/heads/"):
 					return commandResult{stdout: env["GITHUB_SHA"]}, nil
-				case args[0] == "gh" && strings.Contains(args[2], "/releases/tags/"):
+				case args[0] == "gh" && args[2] == "repos/tuxcrate/zrepl/releases/42":
 					data, _ := json.Marshal(draft)
 					return commandResult{stdout: string(data)}, nil
 				case args[0] == "gh" && args[2] == "--paginate":
