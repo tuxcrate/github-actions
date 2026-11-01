@@ -214,14 +214,17 @@ func (a app) test(ctx context.Context, archive, requested, version string) (err 
 		if strings.TrimSpace(string(actual)) != p.OS+"/"+p.Architecture {
 			return fmt.Errorf("Loaded %s instead of %s", strings.TrimSpace(string(actual)), names[i])
 		}
+		testIDs = append(testIDs, id)
+		if err := a.checkRuntimeUser(ctx, image, names[i], id); err != nil {
+			return err
+		}
 		if hook != nil {
-			testIDs = append(testIDs, id)
 			fmt.Fprintf(a.stdout, "Running tests/smoke.sh for %s (%s).\n", names[i], version)
 			if err := a.runHook(ctx, image, version, names[i], id, 5*time.Minute, 30*time.Second); err != nil {
 				return err
 			}
 		} else {
-			fmt.Fprintln(a.stdout, "No tests/smoke.sh; retaining Containerfile assertions and platform validation only.")
+			fmt.Fprintln(a.stdout, "No tests/smoke.sh; shared platform and runtime-user validation still apply.")
 		}
 	}
 	current, err := archiveHash(archive)
@@ -249,6 +252,38 @@ func (a app) test(ctx context.Context, archive, requested, version string) (err 
 		}
 	}
 	passed = true
+	return nil
+}
+
+func (a app) checkRuntimeUser(ctx context.Context, image, platform, id string) error {
+	ctx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	raw, err := a.command(ctx, true, "docker", "image", "inspect", "--format", "{{json .Config.Labels}}", image)
+	if err != nil {
+		return err
+	}
+	var labels map[string]string
+	if err := json.Unmarshal(raw, &labels); err != nil {
+		return fmt.Errorf("decode image labels for %s: %w", platform, err)
+	}
+	expected := "1000:1000:tuxcrate:tuxcrate"
+	switch policy := labels["com.tuxcrate.runtime-user"]; policy {
+	case "", "tuxcrate":
+	case "root":
+		expected = "0:0:root:root"
+	default:
+		return fmt.Errorf("unsupported com.tuxcrate.runtime-user label %q for %s; expected tuxcrate or root", policy, platform)
+	}
+	fmt.Fprintf(a.stdout, "Checking default runtime user for %s (expected %s).\n", platform, expected)
+	actual, err := a.command(ctx, true, "docker", "run", "--rm", "--pull=never", "--platform", platform,
+		"--network", "none", "--label", "io.tuxcrate.smoke-test="+id, "--entrypoint", "/bin/sh", image,
+		"-eu", "-c", `printf '%s:%s:%s:%s\n' "$(id -u)" "$(id -g)" "$(id -un)" "$(id -gn)"`)
+	if err != nil {
+		return fmt.Errorf("runtime-user check for %s: %w", platform, err)
+	}
+	if actual := strings.TrimSpace(string(actual)); actual != expected {
+		return fmt.Errorf("runtime-user check for %s: expected %s, got %q", platform, expected, actual)
+	}
 	return nil
 }
 
