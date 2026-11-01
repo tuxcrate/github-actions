@@ -85,7 +85,7 @@ func TestFinalizeReservedDraft(t *testing.T) {
 					if err := json.Unmarshal([]byte(input), &payload); err != nil {
 						t.Fatal(err)
 					}
-					if len(payload) != 1 || !strings.Contains(payload["body"], "0.7.0-r9@"+env["IMAGE_DIGEST"]) || !strings.Contains(payload["body"], "- OS: `Debian/13.7`") || !strings.Contains(payload["body"], "<!-- tuxcrate-track:stable -->") {
+					if len(payload) != 2 || payload["tag_name"] != env["RELEASE_TAG"] || !strings.Contains(payload["body"], "0.7.0-r9@"+env["IMAGE_DIGEST"]) || !strings.Contains(payload["body"], "- OS: `Debian/13.7`") || !strings.Contains(payload["body"], "<!-- tuxcrate-track:stable -->") {
 						t.Fatal(payload)
 					}
 					if scenario == "PATCH failure" {
@@ -156,7 +156,7 @@ func TestFinalizePrereleaseDraft(t *testing.T) {
 					if err := json.Unmarshal([]byte(input), &payload); err != nil {
 						t.Fatal(err)
 					}
-					if len(payload) != 1 || !strings.Contains(payload["body"], "Application version: `"+version+"`") || !strings.Contains(payload["body"], env["IMAGE_VERSION"]+"-r3@"+env["IMAGE_DIGEST"]) {
+					if len(payload) != 2 || payload["tag_name"] != env["RELEASE_TAG"] || !strings.Contains(payload["body"], "Application version: `"+version+"`") || !strings.Contains(payload["body"], env["IMAGE_VERSION"]+"-r3@"+env["IMAGE_DIGEST"]) {
 						t.Fatal(payload)
 					}
 					patched = true

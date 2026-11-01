@@ -319,9 +319,12 @@ func (a app) finalize() error {
 		return err
 	}
 	notes += "\n" + marker + "\n"
+	// GitHub can replace a draft's tag with an untagged-* placeholder when
+	// updating its body without tag_name. Preserve the reserved revision.
 	payload, err := json.Marshal(struct {
-		Body string `json:"body"`
-	}{notes})
+		TagName string `json:"tag_name"`
+		Body    string `json:"body"`
+	}{tag, notes})
 	if err != nil {
 		return err
 	}
