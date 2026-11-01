@@ -108,14 +108,14 @@ jobs:
       - name: Prepare PR image tags
         id: preview
         env:
-          IMAGE_REPOSITORY: ${{ github.repository }}
+          IMAGE: ${{ matrix.image }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           TRACK: ${{ matrix.track }}
           COMMIT_SHA: ${{ github.sha }}
           IMAGE_VERSION: ${{ matrix.image-version }}
           PLATFORMS: ${{ matrix.platforms }}
         run: |
-          image="ghcr.io/${IMAGE_REPOSITORY,,}-pr"
+          image="$IMAGE"
           tag="pr-${PR_NUMBER}-${TRACK}"
           {
             echo "image=$image"
@@ -154,7 +154,7 @@ jobs:
           outputs: type=oci,dest=${{ runner.temp }}/container-${{ matrix.track }}.tar
           secrets: |
             github_token=${{ github.event.pull_request.head.repo.full_name == github.repository && secrets.GITHUB_TOKEN || '' }}
-          # Preserve ownership even when a rerun leaves an older index untagged.
+          # Identify preview artifacts independently of their mutable tags.
           annotations: |
             index:io.tuxcrate.repository=${{ github.repository }}
             index:io.tuxcrate.pull-request=${{ github.event.pull_request.number }}
