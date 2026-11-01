@@ -115,15 +115,14 @@ jobs:
           IMAGE_VERSION: ${{ matrix.image-version }}
           PLATFORMS: ${{ matrix.platforms }}
         run: |
-          image="$IMAGE"
           tag="pr-${PR_NUMBER}-${TRACK}"
           {
-            echo "image=$image"
+            echo "image=$IMAGE"
             echo "package-version=${IMAGE_VERSION}-${tag}-${COMMIT_SHA:0:7}"
             echo "platform=${PLATFORMS%%,*}"
             echo 'tags<<PR_IMAGE_TAGS'
-            echo "$image:$tag"
-            echo "$image:$tag-$COMMIT_SHA"
+            echo "$IMAGE:$tag"
+            echo "$IMAGE:$tag-$COMMIT_SHA"
             echo 'PR_IMAGE_TAGS'
           } >> "$GITHUB_OUTPUT"
       - name: Check out shared test and validation tooling
