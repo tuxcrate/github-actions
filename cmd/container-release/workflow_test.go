@@ -380,7 +380,7 @@ func TestWorkflowPRImages(t *testing.T) {
 		switch {
 		case s.ID == "preview":
 			prepared = true
-			if s.Env["IMAGE_REPOSITORY"] != "${{ github.repository }}" || s.Env["PR_NUMBER"] != "${{ github.event.pull_request.number }}" || s.Env["TRACK"] != "${{ matrix.track }}" || s.Env["COMMIT_SHA"] != "${{ github.sha }}" || s.Env["PLATFORMS"] != "${{ matrix.platforms }}" {
+			if s.Env["IMAGE_REPOSITORY"] != "${{ github.repository }}" || s.Env["PR_NUMBER"] != "${{ github.event.pull_request.number }}" || s.Env["TRACK"] != "${{ matrix.track }}" || s.Env["COMMIT_SHA"] != "${{ github.sha }}" || s.Env["PLATFORMS"] != "${{ matrix.platforms }}" || s.Env["IMAGE_VERSION"] != "${{ matrix.image-version }}" {
 				t.Fatal("preview tags must use caller repository, PR number, track, and tested merge commit")
 			}
 			for _, track := range []string{"stable", "preview"} {
@@ -388,7 +388,7 @@ func TestWorkflowPRImages(t *testing.T) {
 					output := filepath.Join(t.TempDir(), "output")
 					sha := strings.Repeat("a", 40)
 					cmd := exec.Command("bash", "-e", "-o", "pipefail", "-c", s.Run)
-					cmd.Env = append(os.Environ(), "IMAGE_REPOSITORY=Tuxcrate/Zrepl", "PR_NUMBER=12", "TRACK="+track, "COMMIT_SHA="+sha, "GITHUB_OUTPUT="+output, "PLATFORMS=linux/arm64,linux/amd64")
+					cmd.Env = append(os.Environ(), "IMAGE_REPOSITORY=Tuxcrate/Zrepl", "PR_NUMBER=12", "TRACK="+track, "COMMIT_SHA="+sha, "GITHUB_OUTPUT="+output, "PLATFORMS=linux/arm64,linux/amd64", "IMAGE_VERSION=1.2.3")
 					if out, err := cmd.CombinedOutput(); err != nil {
 						t.Fatalf("prepare tags: %v: %s", err, out)
 					}
@@ -398,7 +398,7 @@ func TestWorkflowPRImages(t *testing.T) {
 					}
 					image := "ghcr.io/tuxcrate/zrepl-pr"
 					tag := "pr-12-" + track
-					want := "image=" + image + "\nplatform=linux/arm64\ntags<<PR_IMAGE_TAGS\n" + image + ":" + tag + "\n" + image + ":" + tag + "-" + sha + "\nPR_IMAGE_TAGS\n"
+					want := "image=" + image + "\npackage-version=1.2.3-" + tag + "-" + sha[:7] + "\nplatform=linux/arm64\ntags<<PR_IMAGE_TAGS\n" + image + ":" + tag + "\n" + image + ":" + tag + "-" + sha + "\nPR_IMAGE_TAGS\n"
 					if string(got) != want {
 						t.Fatalf("unexpected preview tags: %s", got)
 					}

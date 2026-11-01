@@ -112,12 +112,14 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           TRACK: ${{ matrix.track }}
           COMMIT_SHA: ${{ github.sha }}
+          IMAGE_VERSION: ${{ matrix.image-version }}
           PLATFORMS: ${{ matrix.platforms }}
         run: |
           image="ghcr.io/${IMAGE_REPOSITORY,,}-pr"
           tag="pr-${PR_NUMBER}-${TRACK}"
           {
             echo "image=$image"
+            echo "package-version=${IMAGE_VERSION}-${tag}-${COMMIT_SHA:0:7}"
             echo "platform=${PLATFORMS%%,*}"
             echo 'tags<<PR_IMAGE_TAGS'
             echo "$image:$tag"
@@ -146,6 +148,7 @@ jobs:
           platforms: ${{ matrix.platforms }}
           build-args: |
             ${{ matrix.build-args }}
+            PACKAGE_VERSION=${{ steps.preview.outputs.package-version }}
             BUILDKIT_DOCKERFILE_CHECK=skip=InvalidDefaultArgInFrom
           pull: true
           outputs: type=oci,dest=${{ runner.temp }}/container-${{ matrix.track }}.tar
@@ -160,7 +163,7 @@ jobs:
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.version=${{ matrix.image-version }}
+            org.opencontainers.image.version=${{ steps.preview.outputs.package-version }}
           # Check current package availability on every architecture, including
           # reruns after an upstream repository finishes publishing a version.
           no-cache: true
@@ -172,6 +175,7 @@ jobs:
           PLATFORMS: ${{ matrix.platforms }}
           APP_VERSION: ${{ matrix.version }}
           TRACK: ${{ matrix.track }}
+          PACKAGE_VERSION: ${{ steps.preview.outputs.package-version }}
         run: '"$RUNNER_TEMP/container-artifact" test "$RUNNER_TEMP/container-$TRACK.tar" "$PLATFORMS" "$APP_VERSION"'
       - name: Generate and validate synthetic release metadata
         env:
@@ -374,6 +378,17 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends skopeo
+      - name: Reserve revision and create draft release before building
+        id: release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APP_VERSION: ${{ matrix.version }}
+          IMAGE_VERSION: ${{ matrix.image-version }}
+          TRACK: ${{ matrix.track }}
+          TAGS: ${{ matrix.tags }}
+          PRERELEASE: ${{ matrix.prerelease }}
+          IMAGE: ${{ steps.metadata.outputs.image }}
+        run: '"$RUNNER_TEMP/container-release" reserve'
       - name: Build all platforms into a local OCI archive
         id: build
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
@@ -383,6 +398,7 @@ jobs:
           platforms: ${{ matrix.platforms }}
           build-args: |
             ${{ matrix.build-args }}
+            PACKAGE_VERSION=${{ steps.release.outputs.package-version }}
             BUILDKIT_DOCKERFILE_CHECK=skip=InvalidDefaultArgInFrom
           # Pull alone does not refresh a cached apt-get layer. Every release
           # must actually install the currently available security updates.
@@ -396,7 +412,7 @@ jobs:
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.version=${{ matrix.image-version }}
+            org.opencontainers.image.version=${{ steps.release.outputs.package-version }}
           cache-to: type=gha,mode=max,scope=container-${{ matrix.track }}
       - name: Test every platform from the built archive
         id: tested
@@ -404,6 +420,7 @@ jobs:
           PLATFORMS: ${{ matrix.platforms }}
           APP_VERSION: ${{ matrix.version }}
           TRACK: ${{ matrix.track }}
+          PACKAGE_VERSION: ${{ steps.release.outputs.package-version }}
         run: '"$RUNNER_TEMP/container-artifact" test "$RUNNER_TEMP/container-$TRACK.tar" "$PLATFORMS" "$APP_VERSION"'
       - name: Validate final image OS metadata before upload
         env:
@@ -431,8 +448,7 @@ jobs:
           IMAGE: ${{ steps.metadata.outputs.image }}
           TRACK: ${{ matrix.track }}
         run: '"$RUNNER_TEMP/container-artifact" publish "$RUNNER_TEMP/container-$TRACK.tar" "$IMAGE"'
-      - name: Reserve revision and create draft release
-        id: release
+      - name: Finalize reserved draft with tested artifact metadata
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           APP_VERSION: ${{ matrix.version }}
@@ -443,7 +459,8 @@ jobs:
           IMAGE: ${{ steps.metadata.outputs.image }}
           IMAGE_DIGEST: ${{ steps.tested.outputs.digest }}
           PLATFORMS: ${{ matrix.platforms }}
-        run: '"$RUNNER_TEMP/container-release" reserve'
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: '"$RUNNER_TEMP/container-release" finalize'
       - name: Attach machine-readable release metadata
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

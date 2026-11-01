@@ -161,10 +161,6 @@ func (a app) reserve() error {
 	if err != nil {
 		return err
 	}
-	digest := a.getenv("IMAGE_DIGEST")
-	if !releaseconfig.ValidDigest(digest) {
-		return errors.New("build did not return a valid image digest")
-	}
 	repository := a.getenv("GITHUB_REPOSITORY")
 	data, err := githubapi.Call(a.run, "", "--paginate", "--slurp", "repos/"+repository+"/releases?per_page=100")
 	if err != nil {
@@ -179,10 +175,8 @@ func (a app) reserve() error {
 		return err
 	}
 	tags := strings.Split(gitTags, "\n")
-	var releases []release
 	for _, page := range pages {
 		for _, r := range page {
-			releases = append(releases, r)
 			// Drafts durably reserve revisions even after failed publication.
 			tags = append(tags, r.TagName)
 		}
@@ -199,14 +193,8 @@ func (a app) reserve() error {
 	if err := a.assertTagAvailable(image, tags[0]); err != nil {
 		return err
 	}
-	previous, err := a.previousRelease(releases)
-	if err != nil {
-		return err
-	}
-	notes, err := a.releaseNotes(version, tags, image, digest, previous)
-	if err != nil {
-		return err
-	}
+	// The digest and final OS identity do not exist until the build is tested.
+	notes := fmt.Sprintf("Revision reserved for application version `%s` at source commit `%s`. Build and publication pending.\n", version, a.getenv("GITHUB_SHA"))
 	track := a.trackName()
 	notes += "\n<!-- tuxcrate-track:" + track + " -->\n"
 	payload, err := json.Marshal(releaseRequest{
@@ -227,11 +215,98 @@ func (a app) reserve() error {
 	if err := a.output("tag", tag); err != nil {
 		return err
 	}
+	if err := a.output("package-version", tags[0]); err != nil {
+		return err
+	}
 	if err := a.output("tags", strings.Join(tags, "\n")); err != nil {
 		return err
 	}
 	if err := a.output("latest", strconv.FormatBool(!a.isPrerelease() && contains(tags[1:], "latest"))); err != nil {
 		return err
+	}
+	return appendFile(a.getenv("GITHUB_STEP_SUMMARY"), "# "+tags[0]+"\n\n"+notes)
+}
+
+// finalize fills the reserved draft with metadata from the tested artifact.
+// It never allocates another revision or publishes a release or image tag.
+func (a app) finalize() error {
+	if err := a.assertCurrentCommit(); err != nil {
+		return err
+	}
+	version := a.getenv("APP_VERSION")
+	if err := releaseversion.Validate(version); err != nil {
+		return err
+	}
+	imageVersion := a.getenv("IMAGE_VERSION")
+	if err := releaseversion.ValidateImageVersion(version, imageVersion); err != nil {
+		return err
+	}
+	tag := a.getenv("RELEASE_TAG")
+	tagVersion, revision, err := releaseversion.ParseReleaseTag(tag)
+	if err != nil {
+		return err
+	}
+	if tagVersion != imageVersion || !releaseconfig.ValidTrackName(a.trackName()) {
+		return errors.New("reserved release does not match image version or track")
+	}
+	tags, err := a.tags(imageVersion, revision)
+	if err != nil {
+		return err
+	}
+	image, err := releaseconfig.ImageName(a.getenv("IMAGE"), a.getenv("GITHUB_REPOSITORY"))
+	if err != nil {
+		return err
+	}
+	digest := a.getenv("IMAGE_DIGEST")
+	if !releaseconfig.ValidDigest(digest) {
+		return errors.New("build did not return a valid image digest")
+	}
+	repository := a.getenv("GITHUB_REPOSITORY")
+	data, err := githubapi.Call(a.run, "", "repos/"+repository+"/releases/tags/"+tag)
+	if err != nil {
+		return err
+	}
+	var draft release
+	if err := json.Unmarshal([]byte(data), &draft); err != nil {
+		return fmt.Errorf("decode reserved release: %w", err)
+	}
+	marker := "<!-- tuxcrate-track:" + a.trackName() + " -->"
+	if draft.ID <= 0 || !draft.Draft || draft.TagName != tag || draft.TargetCommitish != a.getenv("GITHUB_SHA") || draft.Prerelease != a.isPrerelease() || !strings.Contains(draft.Body, marker) {
+		return errors.New("refusing to finalize a release that is not this build's reserved draft")
+	}
+	// Recheck after the build; never overwrite a revision published elsewhere.
+	if err := a.assertTagAvailable(image, tags[0]); err != nil {
+		return err
+	}
+	data, err = githubapi.Call(a.run, "", "--paginate", "--slurp", "repos/"+repository+"/releases?per_page=100")
+	if err != nil {
+		return err
+	}
+	var pages [][]release
+	if err := json.Unmarshal([]byte(data), &pages); err != nil {
+		return fmt.Errorf("decode release history: %w", err)
+	}
+	var releases []release
+	for _, page := range pages {
+		releases = append(releases, page...)
+	}
+	previous, err := a.previousRelease(releases)
+	if err != nil {
+		return err
+	}
+	notes, err := a.releaseNotes(version, tags, image, digest, previous)
+	if err != nil {
+		return err
+	}
+	notes += "\n" + marker + "\n"
+	payload, err := json.Marshal(struct {
+		Body string `json:"body"`
+	}{notes})
+	if err != nil {
+		return err
+	}
+	if _, err := githubapi.Call(a.run, string(payload), "--method", "PATCH", "repos/"+repository+"/releases/"+strconv.FormatInt(draft.ID, 10), "--input", "-"); err != nil {
+		return fmt.Errorf("finalize reserved release %s: %w", tag, err)
 	}
 	return appendFile(a.getenv("GITHUB_STEP_SUMMARY"), "# "+tags[0]+"\n\n"+notes)
 }

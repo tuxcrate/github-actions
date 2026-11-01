@@ -103,7 +103,7 @@ func Plan(r io.Reader, repository string) ([]Build, error) {
 		}
 		keys := make([]string, 0, len(t.BuildArgs))
 		for key, value := range t.BuildArgs {
-			if !argRE.MatchString(key) || key == "APP_VERSION" || key == "BASE_IMAGE" || strings.ContainsAny(value, "\r\n") {
+			if !argRE.MatchString(key) || key == "APP_VERSION" || key == "BASE_IMAGE" || key == "PACKAGE_VERSION" || strings.ContainsAny(value, "\r\n") {
 				return nil, fmt.Errorf("invalid build argument %q", key)
 			}
 			keys = append(keys, key)

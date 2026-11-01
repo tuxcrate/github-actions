@@ -19,6 +19,8 @@ func (a app) execute(args []string) error {
 			return a.metadata()
 		case "reserve":
 			return a.reserve()
+		case "finalize":
+			return a.finalize()
 		case "plan":
 			return a.plan()
 		case "release-plan":
@@ -29,5 +31,5 @@ func (a app) execute(args []string) error {
 			return a.checkManifest()
 		}
 	}
-	return errors.New("usage: container-release {plan|release-plan|metadata|reserve|manifest|check-manifest}")
+	return errors.New("usage: container-release {plan|release-plan|metadata|reserve|finalize|manifest|check-manifest}")
 }
