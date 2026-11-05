@@ -208,7 +208,7 @@ jobs:
           "$RUNNER_TEMP/container-release" check-manifest
       - name: Log in to GHCR after successful tests
         if: env.PUBLISH_PR == 'true'
-        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -449,7 +449,7 @@ jobs:
           cd "$RUNNER_TEMP/release-validation"
           "$RUNNER_TEMP/container-release" check-manifest
       - name: Log in to GHCR after successful tests
-        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
